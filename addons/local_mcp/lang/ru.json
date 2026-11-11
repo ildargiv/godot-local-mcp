@@ -216,5 +216,12 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] слушаю http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "Скопируйте нужный блок в конфиг вашего MCP-клиента. Файл перезаписывается при каждом запуске редактора.",
  "missing or wrong token (see local_mcp.json)": "missing or wrong token (см. local_mcp.json)",
- "\"%s\": %s s, %s": "\"%s\": %s c, %s"
+ "\"%s\": %s s, %s": "\"%s\": %s c, %s",
+ "Ran %s for %s s.": "Запуск %s, прошло %s с.",
+ "file or folder not found: ": "файл или папка не найдены: ",
+ "Check failed: the headless Godot process did not finish. Its output:\n": "Проверка не удалась: процесс Godot без окна не завершился. Его вывод:\n",
+ "Checked %d scripts: no errors": "Проверено скриптов: %d, ошибок нет",
+ "does not compile, details in the editor Output panel": "не компилируется, подробности в панели Output редактора",
+ "Checked %d scripts, errors in %d:": "Проверено скриптов: %d, с ошибками: %d",
+ "…and %d more": "…и ещё %d"
 }

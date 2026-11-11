@@ -17,6 +17,8 @@ var token := ""
 var _tcp := TCPServer.new()
 var _conns: Array = []  # [{peer, buf, started}]
 var _busy := false
+## Replies held back by the handler ("defer"): [{peer, started, max_ms, ready, finish, next_check}]
+var _pending: Array = []
 
 
 ## Tries to bind a port in [port, port+9]. Returns the bound port or -1.
@@ -28,9 +30,10 @@ func start(port: int) -> int:
 
 
 func stop() -> void:
-	for c in _conns:
+	for c in _conns + _pending:
 		(c.peer as StreamPeerTCP).disconnect_from_host()
 	_conns.clear()
+	_pending.clear()
 	_tcp.stop()
 
 
@@ -55,6 +58,29 @@ func _poll_inner() -> void:
 		if _poll_conn(c):
 			still.append(c)
 	_conns = still
+	if not _pending.is_empty():
+		_poll_pending()
+
+
+func _poll_pending() -> void:
+	var now := Time.get_ticks_msec()
+	var waiting: Array = []
+	for p in _pending:
+		var peer: StreamPeerTCP = p.peer
+		peer.poll()
+		if peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			continue  # the client gave up
+		var done: bool = now - int(p.started) >= int(p.max_ms)
+		if not done and now >= int(p.next_check):
+			p.next_check = now + 250
+			var ready: Callable = p.ready
+			done = ready.is_valid() and bool(ready.call())
+		if done:
+			var finish: Callable = p.finish
+			_send(peer, 200, "application/json", str(finish.call()))
+		else:
+			waiting.append(p)
+	_pending = waiting
 
 
 ## true: the connection is still alive and waiting for data.
@@ -127,6 +153,11 @@ func _dispatch(peer: StreamPeerTCP, method: String, path: String, headers: Dicti
 	match method:
 		"POST":
 			var res: Dictionary = handler.call(body)
+			if res.has("defer"):
+				var d: Dictionary = res.defer
+				_pending.append({"peer": peer, "started": Time.get_ticks_msec(), "max_ms": d.max_ms,
+					"ready": d.ready, "finish": d.finish, "next_check": 0})
+				return
 			var status: int = res.get("status", 200)
 			if status == 202:
 				_send(peer, 202, "text/plain", "")

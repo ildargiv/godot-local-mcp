@@ -204,6 +204,29 @@ def c_props(g, ctx, answer):
     return fails
 
 
+CHECK_A = "extends Node\n\nvar hp = 10\n\nfunc hit(dmg):\n\thp -= dmg\n\tif hp <= 0\n\t\tprint(\"dead\")\n"
+CHECK_B = ("extends Node\n\nfunc total(items: Array) -> int:\n\tvar sum: int = 0\n\tfor i in items:\n"
+           "\t\tsum += i\n\treturn summ\n")
+CHECK_C = "extends Node\n\nfunc greet(who: String) -> String:\n\treturn \"Hello, \" + who\n"
+
+
+def t_check_setup(g, ctx):
+    new_scene(g, ctx)
+    for name, code in (("health.gd", CHECK_A), ("inventory.gd", CHECK_B), ("greeter.gd", CHECK_C)):
+        g.call("script_write", path=f"{ctx['dir']}/scripts/{name}", content=code)
+
+
+def c_check(g, ctx, answer):
+    fails = []
+    for name, keep in (("health.gd", "hp -= dmg"), ("inventory.gd", "sum += i"), ("greeter.gd", "Hello, ")):
+        ok, body = script_ok(g, f"{ctx['dir']}/scripts/{name}")
+        if not ok:
+            fails.append(f"{name} still has errors")
+        elif keep not in body:
+            fails.append(f"{name}: script logic was lost")
+    return fails
+
+
 def t_run_setup(g, ctx):
     new_scene(g, ctx)
     code = ctx["secret"]
@@ -385,6 +408,20 @@ TASKS = [
         ],
     },
     {
+        "id": "check",
+        "setup": t_check_setup,
+        "prompt": {
+            "en": "Some scripts in the folder {dir}/scripts do not compile. Find all the errors and fix them without changing the logic.",
+            "ru": "Часть скриптов в папке {dir}/scripts не компилируется. Найди все ошибки и исправь их, не меняя логику.",
+        },
+        "check": c_check,
+        "golden": [
+            ("project_check", {"path": "{dir}/scripts"}),
+            ("script_edit", {"path": "{dir}/scripts/health.gd", "old_text": "if hp <= 0", "new_text": "if hp <= 0:"}),
+            ("script_edit", {"path": "{dir}/scripts/inventory.gd", "old_text": "return summ", "new_text": "return sum"}),
+        ],
+    },
+    {
         "id": "move",
         "setup": t_move_setup,
         "prompt": {
@@ -426,8 +463,6 @@ TASKS = [
         "check": c_run,
         "golden": [
             ("game_run", {"scene": "current"}),
-            ("__sleep", 6),
-            ("game_output", {}),
             ("game_stop", {}),
         ],
         "golden_answer": "CODE={secret}",
@@ -442,8 +477,6 @@ TASKS = [
         "check": c_debug,
         "golden": [
             ("game_run", {"scene": "current"}),
-            ("__sleep", 6),
-            ("game_output", {"errors_only": True}),
             ("game_stop", {}),
             ("script_edit", {"path": "{dir}/main.gd", "old_text": "items[3]", "new_text": "items[2]"}),
         ],

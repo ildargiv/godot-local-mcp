@@ -7,17 +7,20 @@ The server lives inside an editor plugin and speaks HTTP. No Node.js, no npm, no
 
 ## What makes it different
 
-- **18 tools, about 1.8k tokens for all schemas.** Flat schemas with no modes, one-line descriptions.
+- **19 tools, about 1.8k tokens for all schemas.** Flat schemas with no modes, one-line descriptions.
 - **Forgiving with model mistakes.** The value type comes from the property itself, so a vector can be passed as
   `[100, 50]`, `"100, 50"`, `"Vector2(100, 50)"` or `{"x": 100, "y": 50}`, a color as `"red"`, `"#ff8800"` or
   `[1, 0.5, 0]`, an enum by name (`"Floating"`), a resource as `"res://icon.png"` or `{"type": "CircleShape2D", "radius": 16}`.
   Argument aliases are accepted (`node_path` for `path`, `class_name` for `type` and so on), `camelCase` instead of
   `snake_case`, booleans and numbers sent as strings (`"True"`, `"32"`), and a ```` ```gdscript ```` fence around code.
 - **Script edits without a byte-exact match.** `script_edit` finds the fragment ignoring indentation and re-indents it
-  itself, or replaces lines by number. GDScript is checked for errors right after writing (with line numbers on 4.5+).
+  itself, or replaces lines by number. GDScript is checked for errors right after writing (with line numbers on 4.5+), and `project_check` checks every
+  script of the project with file and line on any 4.x version.
 - **Short text replies.** An error always says what to fix: `node "Plyer" not found; children of ".": Player, Camera2D`,
   `no such property positon (similar: position)`.
 - **Everything goes through Undo.** Any edit made by the model can be reverted with Ctrl+Z in the editor.
+- **Run and see in one call.** `game_run` watches the game for a few seconds (`wait`, default 3) and returns its output
+  and errors right away; it replies earlier if the game exits or the debugger pauses it on an error.
 - **Clean game output.** `game_output` shows your scripts' `print` lines and errors and hides engine service messages
   (drivers, audio). If the debugger paused the game on an error, the reply says so and points to the line.
 - **Replies in your language.** They follow the editor language, with English as the fallback; English, Russian,
@@ -29,7 +32,7 @@ The server lives inside an editor plugin and speaks HTTP. No Node.js, no npm, no
 |---|---|
 | Project and scene | `project_info`, `scene_tree`, `scene_open`, `scene_new`, `scene_save` |
 | Nodes | `node_add`, `node_info`, `node_set`, `node_delete`, `node_move`, `signal_connect` |
-| Scripts | `script_read`, `script_write`, `script_edit` |
+| Scripts | `script_read`, `script_write`, `script_edit`, `project_check` |
 | Game | `game_run`, `game_stop`, `game_output` |
 | Reference | `class_info` |
 
@@ -44,7 +47,7 @@ Off by default so the tool list stays small. Enable them with a checkbox in Proj
 | `tilemap` | `tilemap_setup`, `tilemap_info`, `tilemap_paint`, `tilemap_read` | A tileset from an image in one call (with collision), painting by cells and rectangles, erasing, the map as text with a legend |
 | `animation` | `anim_create`, `anim_key`, `anim_info` | AnimationPlayer and animations, keys for any property in a free value format, loop and autoplay |
 
-With every group enabled there are 25 tools, about 2.5k tokens of schemas.
+With every group enabled there are 26 tools, about 2.6k tokens of schemas.
 
 ## Installation
 
@@ -115,8 +118,8 @@ their content, so game errors are read the same way in an English, Russian, Germ
 
 ## Model bench
 
-`bench/run_bench.py` runs 12 typical tasks through any OpenAI-compatible model and checks the result in the scene:
-build a player, a UI, write a script, connect a signal, fix syntax, move and delete nodes, set properties, run the game
+`bench/run_bench.py` runs 13 typical tasks through any OpenAI-compatible model and checks the result in the scene:
+build a player, a UI, write a script, connect a signal, fix syntax, find and fix errors across a folder of scripts, move and delete nodes, set properties, run the game
 and read its output, find and fix a runtime error, find the right signal from a description, and (with the groups
 enabled) a tile level and an animation.
 
@@ -131,7 +134,7 @@ python bench/run_bench.py --project "C:/Games/BenchProj" --base-url http://local
 # DeepSeek API
 set DEEPSEEK_API_KEY=sk-...
 python bench/run_bench.py --project "C:/Games/BenchProj" --base-url https://api.deepseek.com/v1 --model deepseek-chat --api-key-env DEEPSEEK_API_KEY
-# Check the bench itself without a model (reference solutions, should be 12/12 with the groups enabled)
+# Check the bench itself without a model (reference solutions, should be 13/13 with the groups enabled)
 python bench/run_bench.py --project "C:/Games/BenchProj" --golden
 ```
 
@@ -163,15 +166,15 @@ no broken JSON.
 
 ## Limitations of version 0.1
 
-- Compile error details reach the model on Godot 4.5+ (the `Logger` class). On 4.2–4.4 the model learns that there is
-  an error, and the text is visible in the Output panel.
+- Right after `script_write`/`script_edit`, compile error details reach the model on Godot 4.5+ (the `Logger` class).
+  On 4.2–4.4 the reply says there is an error; `project_check` then gives the text with the line number.
 - After the game stops, `game_output` reads `user://logs/godot.log`, so the project needs
   `debug/file_logging/enable_file_logging` (on by default on desktop).
 - Not yet: screenshots, reading live nodes and input into the running game. These are the next groups.
 
 ## Tested
 
-Godot 4.5.1 on Linux (editor under a virtual display) and Windows (model bench): all 25 tools, the stdio bridge, running the game
-and reading its errors; the bench on reference solutions 12/12 with replies in English, Russian and Chinese; reading
+Godot 4.5.1 on Linux (editor under a virtual display) and Windows (model bench): all 26 tools, the stdio bridge, running the game
+and reading its errors; the bench on reference solutions 13/13 with replies in English, Russian and Chinese; reading
 game errors with the editor UI in English, Russian, German, Chinese and Japanese. Other 4.2+ versions have not been
 tested yet.
