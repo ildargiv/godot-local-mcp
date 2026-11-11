@@ -1,0 +1,4 @@
+.godot/
+local_mcp.json
+__pycache__/
+bench/results/
