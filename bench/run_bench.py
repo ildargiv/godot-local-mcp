@@ -220,6 +220,13 @@ def main() -> None:
         model = Model(args.base_url, model_name, key, args.temperature, args.timeout)
 
     selected = [t for t in TASKS if not args.tasks or t["id"] in args.tasks.split(",")]
+    tool_names = {t["name"] for t in mcp_tools}
+    skipped = [t["id"] for t in selected if t.get("group") and not any(n.startswith(
+        {"tilemap": "tilemap_", "animation": "anim_"}.get(t["group"], t["group"])) for n in tool_names)]
+    if skipped:
+        print(f"Пропускаю {', '.join(skipped)}: их группы выключены (local_mcp/groups/... в настройках проекта "
+              "или LOCAL_MCP_GROUPS=all у редактора)")
+        selected = [t for t in selected if t["id"] not in skipped]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     print(f"Модель: {model_name} | инструментов: {len(tools)}, схемы ~{schema_tokens} токенов | задач: {len(selected)} x {args.repeat}\n")
 

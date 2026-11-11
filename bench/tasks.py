@@ -250,6 +250,58 @@ def c_class(g, ctx, answer):
     return fails
 
 
+def t_tilemap_setup(g, ctx):
+    new_scene(g, ctx)
+
+
+def c_tilemap(g, ctx, answer):
+    text, err = g.call("tilemap_read", path="Ground")
+    if err:
+        return ["нет TileMapLayer Ground: " + text]
+    info, _ = g.call("tilemap_info", path="Ground")
+    fails = []
+    if "32x32" not in info:
+        fails.append("размер тайла не 32x32")
+    if "физических слоёв: 1" not in info:
+        fails.append("у тайлов нет коллизии")
+    rows = {int(l.split()[0]): l.split()[1] for l in text.split("\n")[1:] if l.strip() and l.strip().split()[0].lstrip("-").isdigit()}
+    header = text.split("\n")[0]
+    m = re.search(r"x от (-?\d+)", header)
+    x0 = int(m.group(1)) if m else 0
+    legend = dict(re.findall(r"(\S) = тайл \[(\d+, \d+)\]", text))
+    def tile_at(x, y):
+        row = rows.get(y)
+        if row is None or not (0 <= x - x0 < len(row)) or row[x - x0] == ".":
+            return None
+        return legend.get(row[x - x0])
+    if any(tile_at(x, 6) != "0, 0" for x in range(0, 12)):
+        fails.append("пол y=6, x=0..11 не залит тайлом [0, 0]")
+    if any(tile_at(x, 3) != "1, 0" for x in range(4, 8)):
+        fails.append("платформа y=3, x=4..7 не тайлом [1, 0]")
+    return fails
+
+
+def t_anim_setup(g, ctx):
+    new_scene(g, ctx)
+    g.call("node_add", type="Sprite2D", name="Coin", properties={"texture": "res://icon.svg", "position": [100, 100]})
+
+
+def c_anim(g, ctx, answer):
+    text, err = g.call("anim_info", animation="spin")
+    if err:
+        return ["нет анимации spin: " + text]
+    fails = []
+    if "цикл" not in text.split("\n")[1]:
+        fails.append("spin не зациклена")
+    if 'autoplay "spin"' not in text:
+        fails.append("spin не на автозапуске")
+    if not re.search(r"Coin:rotation: 0: 0; 1: 6\.28", text):
+        fails.append("нет дорожки Coin:rotation 0 -> 6.28 за 1 с")
+    if not re.search(r"Coin:position: 0: \[100, 100\]; 0\.5: \[100, 90\]; 1: \[100, 100\]", text):
+        fails.append("нет дорожки Coin:position 100 -> 90 -> 100")
+    return fails
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 TASKS = [
@@ -377,6 +429,36 @@ TASKS = [
             ("node_add", {"type": "Area2D", "name": "Pickup"}),
             ("node_add", {"parent": "Pickup", "type": "CollisionShape2D", "properties": {"shape": {"type": "CircleShape2D", "radius": 16}}}),
             ("signal_connect", {"from": "Pickup", "signal": "body_entered", "to": ".", "method": "_on_pickup_body_entered"}),
+            ("scene_save", {}),
+        ],
+    },
+    {
+        "id": "tilemap",
+        "group": "tilemap",
+        "setup": t_tilemap_setup,
+        "prompt": "Сделай уровень на тайлах: TileMapLayer с именем Ground, тайлсет из res://icon.svg с тайлами 32x32 и коллизией. "
+                  "Залей пол тайлом [0, 0] по y=6 от x=0 до x=11 и сделай платформу тайлом [1, 0] по y=3 от x=4 до x=7. Сохрани.",
+        "check": c_tilemap,
+        "golden": [
+            ("tilemap_setup", {"path": "Ground", "texture": "res://icon.svg", "tile_size": [32, 32], "collision": True}),
+            ("tilemap_paint", {"path": "Ground", "rect": [0, 6, 11, 6], "tile": [0, 0]}),
+            ("tilemap_paint", {"path": "Ground", "rect": [4, 3, 7, 3], "tile": [1, 0]}),
+            ("scene_save", {}),
+        ],
+    },
+    {
+        "id": "anim",
+        "group": "animation",
+        "setup": t_anim_setup,
+        "prompt": "Сделай монетке Coin анимацию spin длиной 1 секунда, зацикленную и с автозапуском: "
+                  "rotation от 0 до 6.28 за секунду, и одновременно position подпрыгивает с [100, 100] до [100, 90] на 0.5 с и обратно к 1 с. Сохрани.",
+        "check": c_anim,
+        "golden": [
+            ("anim_create", {"name": "spin", "length": 1, "loop": True, "autoplay": True}),
+            ("anim_key", {"animation": "spin", "target": "Coin", "property": "rotation",
+                          "keys": [{"time": 0, "value": 0}, {"time": 1, "value": 6.28}]}),
+            ("anim_key", {"animation": "spin", "target": "Coin", "property": "position",
+                          "keys": [{"time": 0, "value": [100, 100]}, {"time": 0.5, "value": [100, 90]}, {"time": 1, "value": [100, 100]}]}),
             ("scene_save", {}),
         ],
     },

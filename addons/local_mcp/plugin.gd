@@ -61,6 +61,11 @@ func _ensure_settings() -> void:
 	if not ProjectSettings.has_setting(SETTING_AUTH):
 		ProjectSettings.set_setting(SETTING_AUTH, true)
 	ProjectSettings.set_initial_value(SETTING_AUTH, true)
+	for g in Tools.GROUPS:
+		var key: String = "local_mcp/groups/" + g
+		if not ProjectSettings.has_setting(key):
+			ProjectSettings.set_setting(key, false)
+		ProjectSettings.set_initial_value(key, false)
 
 
 func _make_token() -> String:

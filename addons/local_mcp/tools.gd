@@ -32,9 +32,24 @@ const ALIASES := {
 	"signal": ["signal_name"],
 	"method": ["method_name", "callback", "handler"],
 	"filter": ["query", "search", "pattern"],
+	"tile": ["atlas_coords", "tile_coords", "atlas"],
+	"cells": ["positions", "coords", "cell_list"],
+	"texture": ["image", "texture_path", "atlas_texture"],
+	"tile_size": ["cell_size", "tile_px"],
+	"player": ["animation_player", "anim_player"],
+	"animation": ["anim", "animation_name", "anim_name"],
+	"keys": ["keyframes", "frames"],
+}
+
+## Подключаемые группы: имя -> скрипт. Включаются в настройках проекта local_mcp/groups/<имя>
+## или переменной окружения LOCAL_MCP_GROUPS="tilemap,animation" (удобно для стенда).
+const GROUPS := {
+	"tilemap": "res://addons/local_mcp/groups/tilemap.gd",
+	"animation": "res://addons/local_mcp/groups/animation.gd",
 }
 
 var _plugin: EditorPlugin
+var _groups := {}  # имя -> объект группы
 var _logger: Object = null
 var _defs: Array = []
 var _last_run_ms := 0
@@ -43,6 +58,12 @@ var _last_run_ms := 0
 func setup(plugin: EditorPlugin) -> void:
 	_plugin = plugin
 	_defs = _build_defs()
+	for g in GROUPS:
+		var script = load(GROUPS[g])
+		if script:
+			var obj = script.new()
+			obj.t = self
+			_groups[g] = obj
 	if ClassDB.class_exists("Logger") and OS.has_method("add_logger"):
 		var script = load("res://addons/local_mcp/logger_capture.gd")
 		if script:
@@ -54,6 +75,9 @@ func teardown() -> void:
 	if _logger and OS.has_method("remove_logger"):
 		OS.call("remove_logger", _logger)
 	_logger = null
+	for g in _groups:
+		_groups[g].t = null
+	_groups.clear()
 	_plugin = null
 
 
@@ -122,20 +146,38 @@ func _build_defs() -> Array:
 
 
 func list_tools() -> Array:
-	return _defs
+	var out: Array = _defs.duplicate()
+	for g in enabled_groups():
+		out.append_array(_groups[g].defs())
+	return out
+
+
+## Включённые группы. Читается при каждом tools/list: включили галочку — переподключите клиента.
+func enabled_groups() -> Array:
+	var out: Array = []
+	var env := OS.get_environment("LOCAL_MCP_GROUPS").to_lower()
+	for g in _groups:
+		if env.contains(g) or env == "all" or bool(ProjectSettings.get_setting("local_mcp/groups/" + g, false)):
+			out.append(g)
+	return out
 
 
 # ─────────────────────────── диспетчер ───────────────────────────
 
 func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 	var def := {}
-	for d in _defs:
+	var all_defs := list_tools()
+	for d in all_defs:
 		if d.name == name:
 			def = d
 			break
 	if def.is_empty():
+		for g in _groups:
+			for d in _groups[g].defs():
+				if d.name == name:
+					return _err("инструмент %s из группы \"%s\", она выключена. Включите local_mcp/groups/%s в настройках проекта и переподключите клиента" % [name, g, g])
 		var names: Array = []
-		for d in _defs:
+		for d in all_defs:
 			names.append(d.name)
 		return _err("нет инструмента \"%s\". Есть: %s" % [name, ", ".join(names)])
 	var args := _normalize_args(raw_args, def.inputSchema.properties.keys())
@@ -143,9 +185,12 @@ func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 		if not args.has(req) or (args[req] is String and args[req] == "" and req != "new_text" and req != "content"):
 			return _err("не хватает аргумента \"%s\" (обязательные: %s)" % [req, ", ".join(def.inputSchema.required)])
 	var fn := "_t_" + name
-	if not has_method(fn):
-		return _err("инструмент не реализован: " + name)
-	return call(fn, args)
+	if has_method(fn):
+		return call(fn, args)
+	for g in _groups:
+		if _groups[g].has_method(fn):
+			return _groups[g].call(fn, args)
+	return _err("инструмент не реализован: " + name)
 
 
 ## Переименовывает синонимы в канонические имена, приводит числа и булевы.
@@ -1123,6 +1168,10 @@ func _t_game_output(args: Dictionary) -> Dictionary:
 	out.append_array(game_lines)
 	if hidden > 0:
 		out.append("(скрыто %d служебных сообщений движка: драйверы, звук, дисплей)" % hidden)
+	if EditorInterface.is_playing_scene():
+		var frame := _debugger_break_frame()
+		if frame != "":
+			out.append("Игра стоит на паузе: отладчик остановил её на ошибке (%s). Ждать бесполезно: исправьте код и вызовите game_run заново (или game_stop)." % frame)
 	if _logger:
 		var ed := _filter_log(PackedStringArray(_logger.since(0)), true)
 		if not ed.lines.is_empty():
@@ -1156,10 +1205,15 @@ func _debugger_errors() -> PackedStringArray:
 	var base := EditorInterface.get_base_control()
 	if base == null:
 		return out
+	var warn_icon: Texture2D = null
+	var theme := EditorInterface.get_editor_theme()
+	if theme and theme.has_icon("Warning", "EditorIcons"):
+		warn_icon = theme.get_icon("Warning", "EditorIcons")
+	var src_rx := RegEx.create_from_string("[\\w./-]+\\.\\w+:\\d+")
 	for d in base.find_children("*", "ScriptEditorDebugger", true, false):
 		for t in (d as Node).find_children("*", "Tree", true, false):
 			var tr: Tree = t
-			if not str(tr.get_parent().name).begins_with("Errors") or tr.get_root() == null:
+			if not _is_error_tree(tr):
 				continue
 			var it := tr.get_root().get_first_child()
 			while it:
@@ -1170,7 +1224,7 @@ func _debugger_errors() -> PackedStringArray:
 					msg = msg.substr(marker + 4)  # "m2.gd:7 @ _ready(): текст" -> "текст"
 				elif colon > 0 and not msg.substr(0, colon).contains(" "):
 					msg = msg.substr(colon + 2)  # "_ready: текст" -> "текст"
-				var warning := it.get_tooltip_text(1).begins_with("Warning")
+				var warning := warn_icon != null and it.get_icon(0) == warn_icon
 				var where := ""
 				var is_script := false
 				var meta = it.get_metadata(0)
@@ -1181,7 +1235,7 @@ func _debugger_errors() -> PackedStringArray:
 				else:
 					var kid := it.get_first_child()
 					while kid:
-						if kid.get_text(0).contains("Source"):
+						if src_rx.search(kid.get_text(1)):
 							where = kid.get_text(1)
 						kid = kid.get_next()
 				var kind := ("SCRIPT " if is_script else "") + ("WARNING: " if warning else "ERROR: ")
@@ -1190,6 +1244,34 @@ func _debugger_errors() -> PackedStringArray:
 					out.append("   at: " + where)
 				it = it.get_next()
 	return out
+
+
+## Если отладчик остановил игру на ошибке, возвращает верхний кадр стека ("res://main.gd:6 @ _ready").
+func _debugger_break_frame() -> String:
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return ""
+	var rx := RegEx.create_from_string("^\\d+ - (res://[^ ]+:\\d+)(?: - [^:]+: (\\S+))?")
+	for d in base.find_children("*", "ScriptEditorDebugger", true, false):
+		for t in (d as Node).find_children("*", "Tree", true, false):
+			var tr: Tree = t
+			if tr.columns != 1 or tr.get_root() == null or tr.get_root().get_first_child() == null:
+				continue
+			var m := rx.search(tr.get_root().get_first_child().get_text(0))
+			if m:
+				return m.get_string(1) + ((" @ " + m.get_string(2)) if m.get_string(2) != "" else "")
+	return ""
+
+
+## Дерево вкладки ошибок отладчика. Имя вкладки переведено на язык редактора («Errors», «Ошибки»),
+## поэтому узнаём его по содержимому: 2 колонки, в первой время вида 0:00:01:234.
+static func _is_error_tree(tr: Tree) -> bool:
+	if tr.columns != 2 or tr.get_root() == null:
+		return false
+	var first := tr.get_root().get_first_child()
+	if first == null:
+		return false
+	return RegEx.create_from_string("^\\d+:\\d\\d:\\d\\d:\\d\\d\\d$").search(first.get_text(0)) != null
 
 
 ## Текст панели Output редактора (туда отладчик пишет вывод запущенной игры).
