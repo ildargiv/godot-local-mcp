@@ -8,6 +8,8 @@ const PROTOCOL_VERSIONS := ["2025-06-18", "2025-03-26", "2024-11-05"]
 const SERVER_INFO := {"name": "godot-local-mcp", "version": "0.1.0"}
 const INSTRUCTIONS := "Godot editor tools. Node paths are relative to the open scene root: \".\" is the root, \"Player/Sprite2D\" is a child. Call scene_tree first to see the scene. Save with scene_save."
 
+const DEFER := "__defer"  # marks a reply that http_server.gd sends later
+
 var _tools  # tools.gd
 
 
@@ -25,6 +27,8 @@ func handle_http(body: String) -> Dictionary:
 		var out: Array = []
 		for m in msg:
 			var r = _handle_one(m)
+			if r is Dictionary and r.has(DEFER):
+				r = r[DEFER].finish.call()  # no waiting inside a batch
 			if r != null:
 				out.append(r)
 		if out.is_empty():
@@ -33,6 +37,11 @@ func handle_http(body: String) -> Dictionary:
 	var r = _handle_one(msg)
 	if r == null:
 		return {"status": 202}
+	if r is Dictionary and r.has(DEFER):
+		var d: Dictionary = r[DEFER]
+		var fin: Callable = d.finish
+		return {"status": 200, "defer": {"max_ms": d.max_ms, "ready": d.ready,
+			"finish": func() -> String: return JSON.stringify(fin.call())}}
 	return _reply(r)
 
 
@@ -86,16 +95,32 @@ func _handle_one(msg):
 			var res: Dictionary = _tools.call_tool(name, args)
 			if forced != "":
 				L.force("")
-			return _result(id, {
-				"content": [{"type": "text", "text": str(res.get("text", ""))}],
-				"isError": bool(res.get("error", false)),
-			})
+			if res.has("then"):
+				# A tool that wants to watch something first (game_run with wait):
+				# http_server.gd sends the reply later, built by "then".
+				var then: Callable = res.then
+				var finish := func():
+					if forced != "":
+						L.force(forced)
+					var later: Dictionary = then.call()
+					if forced != "":
+						L.force("")
+					return _result(id, _content(later))
+				return {DEFER: {"max_ms": int(res.get("defer_ms", 0)), "ready": res.get("ready", Callable()), "finish": finish}}
+			return _result(id, _content(res))
 		"resources/list":
 			return _result(id, {"resources": []})
 		"prompts/list":
 			return _result(id, {"prompts": []})
 		_:
 			return _error(id, -32601, "method not found: " + method)
+
+
+func _content(res: Dictionary) -> Dictionary:
+	return {
+		"content": [{"type": "text", "text": str(res.get("text", ""))}],
+		"isError": bool(res.get("error", false)),
+	}
 
 
 func _result(id, result) -> Dictionary:

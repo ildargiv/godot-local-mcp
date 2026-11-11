@@ -13,6 +13,10 @@ const Values := preload("res://addons/local_mcp/values.gd")
 const MAX_SCRIPT_READ := 400  # lines per script_read call
 const MAX_TREE_LINES := 250
 const MAX_OUTPUT_LINES := 200
+const MAX_CHECK_ERRORS := 30
+const DEFAULT_RUN_WAIT := 3.0  # seconds game_run watches the game before replying
+const MAX_RUN_WAIT := 20.0
+const CHECK_RUNNER := "res://addons/local_mcp/check_runner.gd"
 
 ## Argument aliases: local models often name fields their own way.
 const ALIASES := {
@@ -41,6 +45,7 @@ const ALIASES := {
 	"player": ["animation_player", "anim_player"],
 	"animation": ["anim", "animation_name", "anim_name"],
 	"keys": ["keyframes", "frames"],
+	"wait": ["seconds", "wait_seconds", "duration", "timeout"],
 }
 
 ## Optional groups: name -> script. Enabled in Project Settings local_mcp/groups/<name>
@@ -137,8 +142,10 @@ func _build_defs() -> Array:
 		_tool("script_edit", "Change part of a script. Either replace lines start_line..end_line with new_text, or replace old_text with new_text (indentation differences are tolerated).",
 			{"path": _s("string"), "new_text": _s("string"), "old_text": _s("string"),
 			"start_line": _s("integer"), "end_line": _s("integer")}, ["path", "new_text"]),
-		_tool("game_run", "Run the game. scene: \"main\" (default), \"current\" or a res://... .tscn path. Then use game_output.",
-			{"scene": _s("string")}),
+		_tool("project_check", "Check all GDScript files of the project for errors, or only path (a file or folder). Shows file:line and the error.",
+			{"path": _s("string", "Optional res://... file or folder.")}, [], true),
+		_tool("game_run", "Run the game, wait a few seconds and return its output and errors (like game_output). scene: \"main\" (default), \"current\" or a res://... .tscn path.",
+			{"scene": _s("string"), "wait": _s("number", "Seconds to watch the game, default 3, 0 = return at once.")}),
 		_tool("game_stop", "Stop the running game.", {}),
 		_tool("game_output", "Show the output and errors of the last game run, and recent editor errors.",
 			{"errors_only": _s("boolean", "Only errors and warnings."), "lines": _s("integer", "Max lines, default 60.")}, [], true),
@@ -1129,22 +1136,114 @@ static func _clean_err(l: String) -> String:
 	return out
 
 
+# ─────────────────────────── tools: project check ───────────────────────────
+
+## Compiles scripts in a separate headless Godot process (check_runner.gd). The engine
+## prints parse errors with file and line there on every 4.x version, while in the editor
+## process the text only reaches us through the Logger class (4.5+).
+func _t_project_check(args: Dictionary) -> Dictionary:
+	var user_args: Array = []
+	var p := str(args.get("path", "")).strip_edges()
+	if p != "" and p != "res://" and p != ".":
+		var r := _res_path(p)
+		if r.has("error"):
+			return _err(r.error)
+		if not FileAccess.file_exists(r.path) and not DirAccess.dir_exists_absolute(r.path):
+			return _err(L.t("file or folder not found: ") + r.path)
+		user_args.append(r.path.trim_suffix("/"))
+	var cmd: Array = ["--headless", "--no-header", "--path", ProjectSettings.globalize_path("res://"),
+		"--script", CHECK_RUNNER, "--"]
+	cmd.append_array(user_args)
+	var output: Array = []
+	OS.execute(OS.get_executable_path(), PackedStringArray(cmd), output, true)
+	var lines := "\n".join(output).split("\n")
+	return _ok(_parse_check(lines))
+
+
+func _parse_check(lines: PackedStringArray) -> String:
+	var at_rx := RegEx.create_from_string("^\\s*at: .*\\((res://[^)]*\\.gd):(\\d+)\\)")
+	var errors: Array = []
+	var seen := {}
+	var failed: Array = []
+	var total := -1
+	var msg := ""
+	for l in lines:
+		if l.begins_with("@@DONE "):
+			total = int(l.substr(7))
+			break
+		if l.begins_with("@@RESULT "):
+			var parts := l.substr(9).rsplit(" ", true, 1)
+			if parts.size() == 2 and parts[1] != "0":
+				failed.append(parts[0])
+			continue
+		if l.begins_with("SCRIPT ERROR: ") or l.begins_with("ERROR: "):
+			msg = l.trim_prefix("SCRIPT ERROR: ").trim_prefix("ERROR: ").trim_prefix("Parse Error: ").strip_edges()
+			continue
+		var m := at_rx.search(l)
+		if m == null:
+			if l.strip_edges().begins_with("at: "):
+				msg = ""  # an engine error not tied to a script line
+			continue
+		if msg != "":
+			var key := "%s:%s" % [m.get_string(1), m.get_string(2)]
+			if not seen.has(key):  # the parser often reports one mistake twice
+				seen[key] = true
+				errors.append("  %s: %s" % [key, msg])
+			msg = ""
+	if total < 0:
+		var tail := Array(lines).filter(func(x): return str(x).strip_edges() != "")
+		return L.t("Check failed: the headless Godot process did not finish. Its output:\n") + "\n".join(tail.slice(maxi(0, tail.size() - 20)))
+	if failed.is_empty():
+		return L.t("Checked %d scripts: no errors") % total
+	for f in failed:
+		if not errors.any(func(e): return str(e).begins_with("  " + str(f) + ":")):
+			errors.append("  %s: %s" % [f, L.t("does not compile, details in the editor Output panel")])
+	var shown := errors.slice(0, MAX_CHECK_ERRORS)
+	var out := L.t("Checked %d scripts, errors in %d:") % [total, failed.size()] + "\n" + "\n".join(shown)
+	if errors.size() > shown.size():
+		out += "\n" + L.t("…and %d more") % (errors.size() - shown.size())
+	return out
+
+
 # ─────────────────────────── tools: game ───────────────────────────
 
 func _t_game_run(args: Dictionary) -> Dictionary:
-	var scene := str(args.get("scene", "main")).strip_edges()
+	var res := _start_game(str(args.get("scene", "main")).strip_edges())
+	var wait := clampf(float(args.get("wait", DEFAULT_RUN_WAIT)), 0.0, MAX_RUN_WAIT)
+	if res.error or wait <= 0.0:
+		return res
+	# The reply is held back by http_server.gd: it comes after `wait` seconds, or earlier
+	# if the game exits or the debugger pauses it on an error. Meanwhile the editor keeps
+	# running, so the Output panel and the debugger receive the game's messages.
+	var scene_path: String = res.scene
+	res["defer_ms"] = int(wait * 1000.0)
+	res["ready"] = func() -> bool:
+		if Time.get_ticks_msec() - _last_run_ms < 700:
+			return false
+		return not EditorInterface.is_playing_scene() or _debugger_break_frame() != ""
+	res["then"] = func() -> Dictionary:
+		var secs := snappedf((Time.get_ticks_msec() - _last_run_ms) / 1000.0, 0.1)
+		var head := L.t("Ran %s for %s s.") % [scene_path, secs]
+		return _ok(head + "\n" + str(_t_game_output({}).text))
+	return res
+
+
+## Starts the game. Returns _ok/_err; on success also "scene" with the scene path.
+func _start_game(scene: String) -> Dictionary:
 	if EditorInterface.is_playing_scene():
 		EditorInterface.stop_playing_scene()
 	_last_run_ms = Time.get_ticks_msec()
 	if _logger:
 		_logger.clear()
+	var res: Dictionary
 	match scene:
 		"", "main":
 			var main := str(ProjectSettings.get_setting("application/run/main_scene", ""))
 			if main == "":
 				return _err(L.t("the project has no main scene. Run scene=\"current\" or give a path res://...tscn"))
 			EditorInterface.play_main_scene()
-			return _ok(L.t("Started the main scene %s. Call game_output in a couple of seconds") % main)
+			res = _ok(L.t("Started the main scene %s. Call game_output in a couple of seconds") % main)
+			res["scene"] = main
 		"current":
 			var root := _root()
 			if root == null:
@@ -1152,7 +1251,8 @@ func _t_game_run(args: Dictionary) -> Dictionary:
 			if root.scene_file_path != "":
 				EditorInterface.save_scene()
 			EditorInterface.play_current_scene()
-			return _ok(L.t("Started the current scene %s. Call game_output in a couple of seconds") % root.scene_file_path)
+			res = _ok(L.t("Started the current scene %s. Call game_output in a couple of seconds") % root.scene_file_path)
+			res["scene"] = root.scene_file_path
 		_:
 			var r := _res_path(scene)
 			if r.has("error"):
@@ -1160,7 +1260,9 @@ func _t_game_run(args: Dictionary) -> Dictionary:
 			if not ResourceLoader.exists(r.path):
 				return _err(L.t("scene not found: ") + r.path)
 			EditorInterface.play_custom_scene(r.path)
-			return _ok(L.t("Started %s. Call game_output in a couple of seconds") % r.path)
+			res = _ok(L.t("Started %s. Call game_output in a couple of seconds") % r.path)
+			res["scene"] = r.path
+	return res
 
 
 func _t_game_stop(_args: Dictionary) -> Dictionary:
