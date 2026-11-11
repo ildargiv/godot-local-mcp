@@ -1,4 +1,4 @@
-"""Минимальный клиент MCP по HTTP для плагина Local MCP (только стандартная библиотека)."""
+"""Minimal MCP-over-HTTP client for the Local MCP plugin (standard library only)."""
 import json
 import os
 import urllib.request
@@ -22,7 +22,9 @@ class GodotMcp:
         self.url = url or "http://127.0.0.1:6600/mcp"
         self.token = token or ""
         self._id = 0
-        # Запросы к 127.0.0.1 не должны идти через системный прокси.
+        # Reply language forced for call() ("en" keeps bench checks language-independent); "" = plugin setting.
+        self.lang = "en"
+        # Requests to 127.0.0.1 must bypass the system proxy.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def rpc(self, method: str, params: dict | None = None):
@@ -46,7 +48,14 @@ class GodotMcp:
         return self.rpc("tools/list")["tools"]
 
     def call(self, name: str, /, **args) -> tuple[str, bool]:
-        """Возвращает (текст ответа, была ли ошибка)."""
-        res = self.rpc("tools/call", {"name": name, "arguments": args})
+        """Returns (reply text, is_error), with replies in self.lang."""
+        return self.call_lang(name, args, self.lang)
+
+    def call_lang(self, name: str, args: dict, lang: str = "") -> tuple[str, bool]:
+        """Calls a tool; lang forces the reply language via params._meta.lang ("" = plugin setting)."""
+        params = {"name": name, "arguments": args}
+        if lang:
+            params["_meta"] = {"lang": lang}
+        res = self.rpc("tools/call", params)
         text = "".join(c.get("text", "") for c in res.get("content", []))
         return text, bool(res.get("isError"))

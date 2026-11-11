@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Мост stdio <-> HTTP для MCP-клиентов, которые умеют запускать только локальный процесс.
+"""stdio <-> HTTP bridge for MCP clients that can only launch a local process.
 
-Читает JSON-RPC сообщения построчно из stdin, отправляет их в плагин Godot
-(POST http://127.0.0.1:<порт>/mcp) и пишет ответы в stdout. Только стандартная библиотека.
+Reads JSON-RPC messages line by line from stdin, sends them to the Godot plugin
+(POST http://127.0.0.1:<port>/mcp) and writes replies to stdout. Standard library only.
 
-    python3 stdio_bridge.py --project /путь/к/проекту
-    python3 stdio_bridge.py --url http://127.0.0.1:6600/mcp --token <токен>
+    python3 stdio_bridge.py --project /path/to/project
+    python3 stdio_bridge.py --url http://127.0.0.1:6600/mcp --token <token>
 
-Порт и токен берутся из <проект>/local_mcp.json и <проект>/.godot/local_mcp_token,
-поэтому после перезапуска редактора ничего менять не нужно.
+Port and token are read from <project>/local_mcp.json and <project>/.godot/local_mcp_token,
+so nothing needs changing after the editor restarts.
 """
 import argparse
 import json
@@ -41,7 +41,7 @@ def error_reply(msg_id, text: str) -> dict:
 
 
 def forward(raw: str, args) -> str | None:
-    url, token = endpoint(args)  # перечитываем каждый раз: редактор мог перезапуститься на другом порту
+    url, token = endpoint(args)  # re-read every time: the editor may have restarted on another port
     req = urllib.request.Request(url, data=raw.encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json, text/event-stream")
@@ -63,18 +63,18 @@ def forward(raw: str, args) -> str | None:
         reason = getattr(e, "reason", e)
         return json.dumps(error_reply(
             msg["id"],
-            f"Godot не отвечает по {url} ({reason}). Откройте проект в редакторе и включите плагин Local MCP.",
+            f"Godot is not answering at {url} ({reason}). Open the project in the editor and enable the Local MCP plugin.",
         ), ensure_ascii=False)
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--project", help="папка проекта Godot")
+    p.add_argument("--project", help="Godot project folder")
     p.add_argument("--url")
     p.add_argument("--token")
     p.add_argument("--timeout", type=float, default=60.0)
     args = p.parse_args()
-    log("старт, endpoint %s" % endpoint(args)[0])
+    log("start, endpoint %s" % endpoint(args)[0])
     for line in sys.stdin:
         line = line.strip()
         if not line:

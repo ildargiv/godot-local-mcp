@@ -1,12 +1,12 @@
 extends Logger
-## Перехват сообщений редактора (Godot 4.5+, класс Logger).
-## Грузится только если ClassDB.class_exists("Logger"), иначе этот файл не используется.
-## Колбэки могут приходить из других потоков, поэтому доступ под мьютексом.
+## Captures editor messages (Godot 4.5+, Logger class).
+## Loaded only if ClassDB.class_exists("Logger"); otherwise this file is unused.
+## Callbacks may come from other threads, so access is guarded by a mutex.
 
 const MAX_LINES := 300
 
 var _lines: PackedStringArray = []
-var _total := 0  # сколько строк пришло за всё время (не сбрасывается при обрезке)
+var _total := 0  # lines received in total (not reset when the buffer is trimmed)
 var _mutex := Mutex.new()
 
 
@@ -34,7 +34,7 @@ func _push(s: String) -> void:
 	_mutex.unlock()
 
 
-## Номер "отметки", чтобы потом забрать только новые строки.
+## A "mark" number, to fetch only newer lines later.
 func mark() -> int:
 	_mutex.lock()
 	var n := _total

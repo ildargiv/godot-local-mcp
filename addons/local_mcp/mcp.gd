@@ -1,6 +1,8 @@
 @tool
 extends RefCounted
-## Слой протокола MCP поверх JSON-RPC 2.0. Без состояния сессии, без SSE.
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## MCP protocol layer over JSON-RPC 2.0. No session state, no SSE.
 
 const PROTOCOL_VERSIONS := ["2025-06-18", "2025-03-26", "2024-11-05"]
 const SERVER_INFO := {"name": "godot-local-mcp", "version": "0.1.0"}
@@ -13,7 +15,7 @@ func _init(tools) -> void:
 	_tools = tools
 
 
-## Обработчик для http_server.gd.
+## Handler for http_server.gd.
 func handle_http(body: String) -> Dictionary:
 	var json := JSON.new()
 	if json.parse(body) != OK:
@@ -38,12 +40,12 @@ func _reply(payload) -> Dictionary:
 	return {"status": 200, "body": JSON.stringify(payload)}
 
 
-## Возвращает ответ JSON-RPC или null для уведомлений.
+## Returns a JSON-RPC response, or null for notifications.
 func _handle_one(msg):
 	if typeof(msg) != TYPE_DICTIONARY or not msg.has("method"):
 		return _error(msg.get("id") if msg is Dictionary else null, -32600, "invalid request")
 	var id = msg.get("id")
-	# JSON в Godot читает все числа как float; id надо вернуть в том же виде (1, а не 1.0).
+	# Godot's JSON reads every number as float; the id must come back as sent (1, not 1.0).
 	if id is float and is_equal_approx(id, roundf(id)):
 		id = int(id)
 	var is_notification: bool = not msg.has("id")
@@ -51,7 +53,7 @@ func _handle_one(msg):
 	var method: String = msg.method
 
 	if is_notification:
-		return null  # notifications/initialized, notifications/cancelled и т.п.
+		return null  # notifications/initialized, notifications/cancelled and so on
 
 	match method:
 		"initialize":
@@ -71,12 +73,19 @@ func _handle_one(msg):
 			var name: String = str(params.get("name", ""))
 			var args = params.get("arguments", {})
 			if typeof(args) == TYPE_STRING:
-				# Некоторые клиенты присылают аргументы строкой JSON.
+				# Some clients send arguments as a JSON string.
 				var parsed = JSON.parse_string(args)
 				args = parsed if parsed is Dictionary else {}
 			if not args is Dictionary:
 				args = {}
+			# The client may ask for a reply language: params._meta.lang ("en", "ru", ...).
+			var meta = params.get("_meta", {})
+			var forced: String = str(meta.get("lang", "")) if meta is Dictionary else ""
+			if forced != "":
+				L.force(forced)
 			var res: Dictionary = _tools.call_tool(name, args)
+			if forced != "":
+				L.force("")
 			return _result(id, {
 				"content": [{"type": "text", "text": str(res.get("text", ""))}],
 				"isError": bool(res.get("error", false)),

@@ -1,8 +1,10 @@
 @tool
 extends RefCounted
-## Прощающее приведение значений из JSON к типам Godot.
-## Тип берётся из самого свойства, поэтому модели не нужно писать теги типов.
-## Возвращает {"ok": true, "value": v} или {"ok": false, "error": "..."}.
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## Forgiving conversion of JSON values to Godot types.
+## The type comes from the property itself, so the model does not need type tags.
+## Returns {"ok": true, "value": v} or {"ok": false, "error": "..."}.
 
 const VEC_KEYS := ["x", "y", "z", "w"]
 const COLOR_KEYS := ["r", "g", "b", "a"]
@@ -16,7 +18,7 @@ static func fail(msg: String) -> Dictionary:
 	return {"ok": false, "error": msg}
 
 
-## Тип и подсказка свойства объекта (с поддержкой путей вида "position:x").
+## Type and hint of an object property (supports paths like "position:x").
 static func property_info(obj: Object, prop: String) -> Dictionary:
 	var base := prop.split(":")[0]
 	for p in obj.get_property_list():
@@ -24,7 +26,7 @@ static func property_info(obj: Object, prop: String) -> Dictionary:
 			if base == prop:
 				return p
 			break
-	# Подсвойство или неизвестное свойство: тип по текущему значению.
+	# Sub-property or unknown property: type from the current value.
 	var cur = obj.get_indexed(NodePath(prop)) if prop.contains(":") else obj.get(prop)
 	return {"name": prop, "type": typeof(cur), "hint": PROPERTY_HINT_NONE, "hint_string": "", "class_name": ""}
 
@@ -37,7 +39,7 @@ static func has_property(obj: Object, prop: String) -> bool:
 	return false
 
 
-## Главная функция: привести raw к типу свойства prop объекта obj.
+## Main entry: convert raw to the type of property prop of object obj.
 static func coerce_for(obj: Object, prop: String, raw) -> Dictionary:
 	var info := property_info(obj, prop)
 	return coerce(raw, int(info.get("type", TYPE_NIL)), int(info.get("hint", 0)),
@@ -54,10 +56,10 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 			if raw is bool: return ok(raw)
 			if raw is String:
 				var s: String = raw.strip_edges().to_lower()
-				if s in ["true", "1", "yes", "on", "да"]: return ok(true)
-				if s in ["false", "0", "no", "off", "нет", ""]: return ok(false)
+				if s in ["true", "1", "yes", "y", "on", "да", "sí", "si", "ja", "oui", "sim", "是", "はい"]: return ok(true)
+				if s in ["false", "0", "no", "off", L.t("none"), ""]: return ok(false)
 			if raw is float or raw is int: return ok(raw != 0)
-			return fail("ожидается true/false")
+			return fail(L.t("expected true/false"))
 		TYPE_INT:
 			if raw is String and (hint == PROPERTY_HINT_ENUM or hint == PROPERTY_HINT_FLAGS):
 				var e := _enum_value(raw, hint_string, hint == PROPERTY_HINT_FLAGS)
@@ -66,12 +68,12 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 			if raw is float or raw is int: return ok(int(raw))
 			if raw is bool: return ok(int(raw))
 			if hint == PROPERTY_HINT_ENUM:
-				return fail("ожидается число или одно из: " + _enum_names(hint_string))
-			return fail("ожидается целое число")
+				return fail(L.t("expected a number or one of: ") + _enum_names(hint_string))
+			return fail(L.t("expected an integer"))
 		TYPE_FLOAT:
 			if raw is float or raw is int: return ok(float(raw))
 			if raw is String and raw.strip_edges().is_valid_float(): return ok(float(raw))
-			return fail("ожидается число")
+			return fail(L.t("expected a number"))
 		TYPE_STRING:
 			return ok(raw if raw is String else JSON.stringify(raw))
 		TYPE_STRING_NAME:
@@ -91,7 +93,7 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 					if p.ok and s.ok:
 						var r := Rect2(p.value, s.value)
 						return ok(Rect2i(r) if t == TYPE_RECT2I else r)
-				return fail("ожидается [x, y, ширина, высота]")
+				return fail(L.t("expected [x, y, width, height]"))
 			var rect := Rect2(n[0], n[1], n[2], n[3])
 			return ok(Rect2i(rect) if t == TYPE_RECT2I else rect)
 		TYPE_OBJECT:
@@ -101,12 +103,12 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 			if raw is String:
 				var parsed = JSON.parse_string(raw)
 				if parsed is Array: return ok(parsed)
-			return fail("ожидается массив")
+			return fail(L.t("expected an array"))
 		TYPE_DICTIONARY:
 			if raw is Dictionary: return ok(raw)
-			return fail("ожидается объект")
+			return fail(L.t("expected an object"))
 		TYPE_PACKED_VECTOR2_ARRAY, TYPE_PACKED_VECTOR3_ARRAY:
-			if not raw is Array: return fail("ожидается массив точек, например [[0,0],[10,0]]")
+			if not raw is Array: return fail(L.t("expected an array of points, e.g. [[0,0],[10,0]]"))
 			var out = PackedVector2Array() if t == TYPE_PACKED_VECTOR2_ARRAY else PackedVector3Array()
 			for item in raw:
 				var v := _vector(item, TYPE_VECTOR2 if t == TYPE_PACKED_VECTOR2_ARRAY else TYPE_VECTOR3)
@@ -114,7 +116,7 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 				out.append(v.value)
 			return ok(out)
 		TYPE_PACKED_COLOR_ARRAY:
-			if not raw is Array: return fail("ожидается массив цветов")
+			if not raw is Array: return fail(L.t("expected an array of colors"))
 			var colors := PackedColorArray()
 			for item in raw:
 				var c := _color(item)
@@ -122,7 +124,7 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 				colors.append(c.value)
 			return ok(colors)
 		TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY, TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY, TYPE_PACKED_STRING_ARRAY:
-			if not raw is Array: return fail("ожидается массив")
+			if not raw is Array: return fail(L.t("expected an array"))
 			return ok(type_convert(raw, t))
 		_:
 			if raw is String:
@@ -132,7 +134,7 @@ static func coerce(raw, t: int, hint: int = 0, hint_string: String = "", cls: St
 			return ok(converted)
 
 
-## Значение без известного типа: пробуем распознать строковые литералы Godot.
+## Value of unknown type: try to recognise Godot string literals.
 static func _guess(raw):
 	if raw is String:
 		var s: String = raw.strip_edges()
@@ -152,10 +154,10 @@ static func _vector(raw, t: int) -> Dictionary:
 	var n := _numbers(raw, VEC_KEYS, dims)
 	if n.is_empty() and (raw is float or raw is int):
 		n = []
-		for i in dims: n.append(float(raw))  # одно число -> все компоненты
+		for i in dims: n.append(float(raw))  # a single number -> all components
 	if n.is_empty():
 		var example := "[1, 2]" if dims == 2 else ("[1, 2, 3]" if dims == 3 else "[1, 2, 3, 4]")
-		return fail("ожидается вектор, например %s или {\"x\":1,\"y\":2}" % example)
+		return fail(L.t("expected a vector, e.g. %s or {\"x\":1,\"y\":2}") % example)
 	match t:
 		TYPE_VECTOR2: return ok(Vector2(n[0], n[1]))
 		TYPE_VECTOR2I: return ok(Vector2i(roundi(n[0]), roundi(n[1])))
@@ -165,7 +167,7 @@ static func _vector(raw, t: int) -> Dictionary:
 		_: return ok(Vector4i(roundi(n[0]), roundi(n[1]), roundi(n[2]), roundi(n[3])))
 
 
-## Достаёт count чисел из [a,b], {x,y}, "a, b", "(a, b)", "Vector2(a, b)".
+## Extracts count numbers from [a,b], {x,y}, "a, b", "(a, b)", "Vector2(a, b)".
 static func _numbers(raw, keys: Array, count: int) -> Array:
 	var out: Array = []
 	if raw is Array:
@@ -210,17 +212,17 @@ static func _color(raw) -> Dictionary:
 		var c := Color.from_string(s, sentinel)
 		if c != sentinel:
 			return ok(c)
-		return fail("неизвестный цвет \"%s\": используйте \"#ff8800\", \"red\" или [1, 0.5, 0]" % s)
+		return fail(L.t("unknown color \"%s\": use \"#ff8800\", \"red\" or [1, 0.5, 0]") % s)
 	var n4 := _numbers(raw, COLOR_KEYS, 4)
 	var n3 := n4 if not n4.is_empty() else _numbers(raw, COLOR_KEYS, 3)
 	if n3.is_empty():
-		return fail("ожидается цвет: \"#ff8800\", \"red\" или [1, 0.5, 0]")
+		return fail(L.t("expected a color: \"#ff8800\", \"red\" or [1, 0.5, 0]"))
 	var scale := 255.0 if (n3[0] > 1.0 or n3[1] > 1.0 or n3[2] > 1.0) else 1.0
 	var a: float = n4[3] if not n4.is_empty() else scale
 	return ok(Color(n3[0] / scale, n3[1] / scale, n3[2] / scale, a / scale if a > 1.0 else a))
 
 
-## Ресурсы: "res://..." загружает файл, {"type": "CircleShape2D", "radius": 20} создаёт новый.
+## Resources: "res://..." loads a file, {"type": "CircleShape2D", "radius": 20} creates a new one.
 static func _object(raw, expected_class: String) -> Dictionary:
 	if raw is Object:
 		return ok(raw)
@@ -231,9 +233,9 @@ static func _object(raw, expected_class: String) -> Dictionary:
 		if not path.begins_with("res://"):
 			if ClassDB.class_exists(path) and ClassDB.can_instantiate(path):
 				return ok(ClassDB.instantiate(path))
-			return fail("ожидается путь res://... или {\"type\": \"%s\", ...свойства}" % (expected_class if expected_class != "" else "ClassName"))
+			return fail(L.t("expected a path res://... or {\"type\": \"%s\", ...properties}") % (expected_class if expected_class != "" else "ClassName"))
 		if not ResourceLoader.exists(path):
-			return fail("файл не найден: " + path)
+			return fail(L.t("file not found: ") + path)
 		return ok(load(path))
 	if raw is Dictionary:
 		var d: Dictionary = raw.duplicate()
@@ -243,23 +245,23 @@ static func _object(raw, expected_class: String) -> Dictionary:
 		if cls.contains(","):
 			cls = cls.split(",")[0]
 		if cls == "" or not ClassDB.class_exists(cls) or not ClassDB.can_instantiate(cls):
-			return fail("укажите класс ресурса в поле \"type\", например {\"type\": \"RectangleShape2D\", \"size\": [32, 32]}")
+			return fail(L.t("give the resource class in the \"type\" field, e.g. {\"type\": \"RectangleShape2D\", \"size\": [32, 32]}"))
 		if expected_class != "" and not expected_class.contains(",") and ClassDB.class_exists(expected_class) \
 				and not ClassDB.is_parent_class(cls, expected_class):
-			return fail("%s не подходит, нужен %s или его наследник" % [cls, expected_class])
+			return fail(L.t("%s does not fit, need %s or a subclass") % [cls, expected_class])
 		var obj: Object = ClassDB.instantiate(cls)
 		var props = d.get("properties", d)
 		if props is Dictionary:
 			for k in props:
 				if k == "properties": continue
 				if not has_property(obj, k):
-					return fail("у %s нет свойства \"%s\"" % [cls, k])
+					return fail(L.t("%s has no property \"%s\"") % [cls, k])
 				var v := coerce_for(obj, k, props[k])
 				if not v.ok:
 					return fail("%s.%s: %s" % [cls, k, v.error])
 				obj.set(k, v.value)
 		return ok(obj)
-	return fail("ожидается путь res://... или объект с полем \"type\"")
+	return fail(L.t("expected a path res://... or an object with a \"type\" field"))
 
 
 static func _enum_value(name: String, hint_string: String, flags: bool) -> Dictionary:
@@ -272,7 +274,7 @@ static func _enum_value(name: String, hint_string: String, flags: bool) -> Dicti
 		if label.to_lower().replace("_", " ") == wanted:
 			return ok(value)
 		idx += 1
-	return fail("нет такого значения")
+	return fail(L.t("no such value"))
 
 
 static func _enum_names(hint_string: String) -> String:
@@ -282,7 +284,7 @@ static func _enum_names(hint_string: String) -> String:
 	return ", ".join(names)
 
 
-## Короткое текстовое представление значения для ответов модели.
+## Short text form of a value for replies to the model.
 static func show(v) -> String:
 	match typeof(v):
 		TYPE_NIL: return "null"
@@ -299,7 +301,7 @@ static func show(v) -> String:
 			return "{%s}" % (v as Object).get_class()
 		TYPE_ARRAY, TYPE_PACKED_VECTOR2_ARRAY, TYPE_PACKED_STRING_ARRAY, TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_FLOAT32_ARRAY:
 			var s := var_to_str(v)
-			return s if s.length() < 200 else s.substr(0, 200) + "…(%d эл.)" % v.size()
+			return s if s.length() < 200 else s.substr(0, 200) + L.t("…(%d items)") % v.size()
 		_:
 			var s2 := var_to_str(v)
 			return s2 if s2.length() < 200 else s2.substr(0, 200) + "…"

@@ -1,12 +1,14 @@
-"""Типовые задачи стенда.
+"""Bench tasks.
 
-У каждой задачи:
-  setup(g, ctx)  — готовит сцену прямыми вызовами MCP (модель этого не видит);
-  prompt         — что просим у модели (по-русски, как просил бы человек);
-  check(g, ctx, answer) -> list[str] — список провалившихся проверок (пусто = задача решена);
-  golden         — эталонная последовательность вызовов, на которой проверяется сам стенд.
+Each task has:
+  setup(g, ctx)  - prepares the scene with direct MCP calls (the model does not see this);
+  prompt         - what we ask the model, per language ({"en": ..., "ru": ...}), the way a person would ask;
+  check(g, ctx, answer) -> list[str] - failed checks (empty = solved);
+  golden         - reference call sequence used to verify the bench itself.
 
-ctx["scene"] — путь сцены этого прогона, ctx["dir"] — папка для файлов прогона.
+ctx["scene"] is this run's scene path, ctx["dir"] the folder for this run's files.
+Setup and checks run with plugin replies forced to English (see GodotMcp.lang), so they work
+whatever language the editor uses.
 """
 import re
 
@@ -30,13 +32,13 @@ def has_prop(text, prop, pattern):
 
 
 def script_ok(g, path):
-    """Скрипт существует и компилируется (перезаписываем тем же текстом, плагин его проверит)."""
+    """The script exists and compiles (rewrite it with the same text; the plugin checks it)."""
     text, err = g.call("script_read", path=path, start_line=1, end_line=100000)
     if err:
         return False, ""
     body = "\n".join(l.split("| ", 1)[1] if "| " in l else "" for l in text.split("\n")[1:])
     t2, err2 = g.call("script_write", path=path, content=body)
-    return (not err2 and "ошибок нет" in t2), body
+    return (not err2 and "Check: no errors" in t2), body
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,17 +51,17 @@ def c_player(g, ctx, answer):
     fails = []
     p = info(g, "Player")
     if p is None or "(CharacterBody2D)" not in p:
-        return ["нет узла Player типа CharacterBody2D"]
+        return ["no Player node of type CharacterBody2D"]
     if not has_prop(p, "position", r"\[200, 300\]"):
         fails.append("Player.position != [200, 300]")
     s = info(g, "Player/Sprite2D") or ""
     if "(Sprite2D)" not in s:
-        fails.append("нет Player/Sprite2D")
+        fails.append("no Player/Sprite2D")
     elif not has_prop(s, "texture", r"icon\.svg"):
-        fails.append("у Sprite2D нет текстуры res://icon.svg")
+        fails.append("Sprite2D has no res://icon.svg texture")
     c = info(g, "Player/CollisionShape2D") or ""
     if not has_prop(c, "shape", r"RectangleShape2D"):
-        fails.append("у CollisionShape2D нет RectangleShape2D")
+        fails.append("CollisionShape2D has no RectangleShape2D")
     return fails
 
 
@@ -71,17 +73,17 @@ def c_ui(g, ctx, answer):
     fails = []
     b = info(g, "StartButton")
     if b is None or "(Button)" not in b:
-        fails.append("нет Button StartButton")
+        fails.append("no Button StartButton")
     elif not has_prop(b, "text", r'"Start"'):
-        fails.append("у кнопки текст не Start")
+        fails.append("button text is not Start")
     l = info(g, "ScoreLabel")
     if l is None or "(Label)" not in l:
-        fails.append("нет Label ScoreLabel")
+        fails.append("no Label ScoreLabel")
     elif not has_prop(l, "text", r'"Score: 0"'):
-        fails.append("у метки текст не 'Score: 0'")
+        fails.append("label text is not 'Score: 0'")
     elif not (has_prop(l, "modulate", r"#ffff00") or has_prop(l, "self_modulate", r"#ffff00")
               or has_prop(l, "theme_override_colors/font_color", r"#ffff00")):
-        fails.append("метка не жёлтая (ни modulate, ни self_modulate, ни font_color)")
+        fails.append("label is not yellow (no modulate, self_modulate or font_color)")
     return fails
 
 
@@ -94,17 +96,17 @@ def c_script(g, ctx, answer):
     path = ctx["dir"] + "/player.gd"
     ok, body = script_ok(g, path)
     if not body:
-        return [f"нет файла {path}"]
+        return [f"no file {path}"]
     fails = []
     if not ok:
-        fails.append("скрипт не компилируется")
+        fails.append("script does not compile")
     if "move_and_slide" not in body:
-        fails.append("в скрипте нет move_and_slide")
+        fails.append("no move_and_slide in the script")
     if "200" not in body:
-        fails.append("скорость 200 не задана")
+        fails.append("speed 200 not set")
     p = info(g, "Player") or ""
     if path not in p:
-        fails.append("скрипт не прикреплён к Player")
+        fails.append("script not attached to Player")
     return fails
 
 
@@ -118,14 +120,14 @@ def c_signal(g, ctx, answer):
     fails = []
     b = info(g, "StartButton") or ""
     if not re.search(r"pressed -> (\.|Menu)\._on_start_button_pressed", b):
-        fails.append("pressed не подключён к Menu._on_start_button_pressed")
+        fails.append("pressed is not connected to Menu._on_start_button_pressed")
     ok, body = script_ok(g, ctx["dir"] + "/menu.gd")
     if "func _on_start_button_pressed" not in body:
-        fails.append("в menu.gd нет метода _on_start_button_pressed")
+        fails.append("menu.gd has no _on_start_button_pressed method")
     elif "Game started" not in body:
-        fails.append("метод не печатает 'Game started'")
+        fails.append("the method does not print 'Game started'")
     if not ok:
-        fails.append("menu.gd не компилируется")
+        fails.append("menu.gd does not compile")
     return fails
 
 
@@ -152,9 +154,9 @@ def c_fix(g, ctx, answer):
     ok, body = script_ok(g, ctx["dir"] + "/broken.gd")
     fails = []
     if not ok:
-        fails.append("broken.gd всё ещё с ошибками")
+        fails.append("broken.gd still has errors")
     if "position.x = 0" not in body or "speed * delta" not in body:
-        fails.append("логика скрипта потеряна")
+        fails.append("script logic was lost")
     return fails
 
 
@@ -170,14 +172,14 @@ def t_move_setup(g, ctx):
 def c_move(g, ctx, answer):
     fails = []
     if info(g, "Level/GoldCoin") is None:
-        fails.append("нет Level/GoldCoin")
+        fails.append("no Level/GoldCoin")
     if info(g, "Coin") is not None:
-        fails.append("Coin остался в корне")
+        fails.append("Coin is still at the root")
     for e in ["Enemy1", "Enemy2", "Level/Enemy3"]:
         if info(g, e) is not None:
-            fails.append(f"{e} не удалён")
+            fails.append(f"{e} not deleted")
     if info(g, "Level") is None:
-        fails.append("Level удалён по ошибке")
+        fails.append("Level was deleted by mistake")
     return fails
 
 
@@ -191,14 +193,14 @@ def c_props(g, ctx, answer):
     fails = []
     p = info(g, "Player") or ""
     if not has_prop(p, "motion_mode", r"Floating|^1"):
-        fails.append("motion_mode не Floating")
+        fails.append("motion_mode is not Floating")
     if not has_prop(p, "z_index", r"^5$"):
         fails.append("z_index != 5")
     c = info(g, "Camera") or ""
     if not has_prop(c, "zoom", r"\[2, 2\]"):
-        fails.append("zoom камеры != [2, 2]")
+        fails.append("camera zoom != [2, 2]")
     if info(g, "Player/Camera") is None:
-        fails.append("камера не перенесена под Player")
+        fails.append("camera not moved under Player")
     return fails
 
 
@@ -212,7 +214,7 @@ def t_run_setup(g, ctx):
 
 
 def c_run(g, ctx, answer):
-    return [] if str(ctx["secret"]) in (answer or "") else [f"в ответе нет числа {ctx['secret']}"]
+    return [] if str(ctx["secret"]) in (answer or "") else [f"the answer does not contain {ctx['secret']}"]
 
 
 def t_debug_setup(g, ctx):
@@ -227,9 +229,9 @@ def c_debug(g, ctx, answer):
     ok, body = script_ok(g, ctx["dir"] + "/main.gd")
     fails = []
     if "items[3]" in body:
-        fails.append("ошибка выхода за границы массива не исправлена")
+        fails.append("array out-of-bounds error not fixed")
     if not ok:
-        fails.append("main.gd не компилируется")
+        fails.append("main.gd does not compile")
     return fails
 
 
@@ -241,12 +243,12 @@ def c_class(g, ctx, answer):
     fails = []
     a = info(g, "Pickup")
     if a is None or "(Area2D)" not in a:
-        return ["нет Area2D Pickup"]
+        return ["no Area2D Pickup"]
     if not re.search(r"body_entered -> (\.|Main)\._on_pickup_body_entered", a):
-        fails.append("body_entered не подключён к Main._on_pickup_body_entered")
+        fails.append("body_entered is not connected to Main._on_pickup_body_entered")
     c = info(g, "Pickup/CollisionShape2D") or ""
     if not has_prop(c, "shape", r"CircleShape2D"):
-        fails.append("нет CollisionShape2D с CircleShape2D")
+        fails.append("no CollisionShape2D with CircleShape2D")
     return fails
 
 
@@ -257,27 +259,27 @@ def t_tilemap_setup(g, ctx):
 def c_tilemap(g, ctx, answer):
     text, err = g.call("tilemap_read", path="Ground")
     if err:
-        return ["нет TileMapLayer Ground: " + text]
+        return ["no TileMapLayer Ground: " + text]
     info, _ = g.call("tilemap_info", path="Ground")
     fails = []
     if "32x32" not in info:
-        fails.append("размер тайла не 32x32")
-    if "физических слоёв: 1" not in info:
-        fails.append("у тайлов нет коллизии")
+        fails.append("tile size is not 32x32")
+    if "physics layers: 1" not in info:
+        fails.append("tiles have no collision")
     rows = {int(l.split()[0]): l.split()[1] for l in text.split("\n")[1:] if l.strip() and l.strip().split()[0].lstrip("-").isdigit()}
     header = text.split("\n")[0]
-    m = re.search(r"x от (-?\d+)", header)
+    m = re.search(r"x from (-?\d+)", header)
     x0 = int(m.group(1)) if m else 0
-    legend = dict(re.findall(r"(\S) = тайл \[(\d+, \d+)\]", text))
+    legend = dict(re.findall(r"(\S) = tile \[(\d+, \d+)\]", text))
     def tile_at(x, y):
         row = rows.get(y)
         if row is None or not (0 <= x - x0 < len(row)) or row[x - x0] == ".":
             return None
         return legend.get(row[x - x0])
     if any(tile_at(x, 6) != "0, 0" for x in range(0, 12)):
-        fails.append("пол y=6, x=0..11 не залит тайлом [0, 0]")
+        fails.append("floor y=6, x=0..11 not filled with tile [0, 0]")
     if any(tile_at(x, 3) != "1, 0" for x in range(4, 8)):
-        fails.append("платформа y=3, x=4..7 не тайлом [1, 0]")
+        fails.append("platform y=3, x=4..7 is not tile [1, 0]")
     return fails
 
 
@@ -289,16 +291,16 @@ def t_anim_setup(g, ctx):
 def c_anim(g, ctx, answer):
     text, err = g.call("anim_info", animation="spin")
     if err:
-        return ["нет анимации spin: " + text]
+        return ["no animation spin: " + text]
     fails = []
-    if "цикл" not in text.split("\n")[1]:
-        fails.append("spin не зациклена")
+    if re.search(r"\bno loop\b|^(?!.*\bloop)", text.split("\n")[1]):
+        fails.append("spin is not looped")
     if 'autoplay "spin"' not in text:
-        fails.append("spin не на автозапуске")
+        fails.append("spin is not autoplay")
     if not re.search(r"Coin:rotation: 0: 0; 1: 6\.28", text):
-        fails.append("нет дорожки Coin:rotation 0 -> 6.28 за 1 с")
+        fails.append("no Coin:rotation track 0 -> 6.28 over 1 s")
     if not re.search(r"Coin:position: 0: \[100, 100\]; 0\.5: \[100, 90\]; 1: \[100, 100\]", text):
-        fails.append("нет дорожки Coin:position 100 -> 90 -> 100")
+        fails.append("no Coin:position track 100 -> 90 -> 100")
     return fails
 
 
@@ -308,8 +310,11 @@ TASKS = [
     {
         "id": "player",
         "setup": t_player_setup,
-        "prompt": "В открытой сцене создай игрока: узел CharacterBody2D с именем Player в позиции (200, 300). "
+        "prompt": {
+            "en": "In the open scene create a player: a CharacterBody2D node named Player at position (200, 300). Inside it add a Sprite2D with the texture res://icon.svg and a CollisionShape2D with a 64x64 rectangle shape. Save the scene.",
+            "ru": "В открытой сцене создай игрока: узел CharacterBody2D с именем Player в позиции (200, 300). "
                   "Внутри него Sprite2D с текстурой res://icon.svg и CollisionShape2D с прямоугольной формой 64x64. Сохрани сцену.",
+        },
         "check": c_player,
         "golden": [
             ("node_add", {"type": "CharacterBody2D", "name": "Player", "properties": {"position": [200, 300]}}),
@@ -322,7 +327,10 @@ TASKS = [
     {
         "id": "ui",
         "setup": t_ui_setup,
-        "prompt": "Добавь в меню кнопку StartButton с текстом Start и метку ScoreLabel с текстом \"Score: 0\" жёлтого цвета. Сохрани.",
+        "prompt": {
+            "en": "Add to the menu a button StartButton with the text Start and a yellow label ScoreLabel with the text \"Score: 0\". Save.",
+            "ru": "Добавь в меню кнопку StartButton с текстом Start и метку ScoreLabel с текстом \"Score: 0\" жёлтого цвета. Сохрани.",
+        },
         "check": c_ui,
         "golden": [
             ("node_add", {"type": "Button", "name": "StartButton", "properties": {"text": "Start"}}),
@@ -333,8 +341,11 @@ TASKS = [
     {
         "id": "script",
         "setup": t_script_setup,
-        "prompt": "Напиши скрипт {dir}/player.gd для узла Player (CharacterBody2D): движение стрелками "
+        "prompt": {
+            "en": "Write a script {dir}/player.gd for the Player node (CharacterBody2D): arrow-key movement (ui_left, ui_right, ui_up, ui_down) at speed 200 using move_and_slide. Attach it to Player and save the scene.",
+            "ru": "Напиши скрипт {dir}/player.gd для узла Player (CharacterBody2D): движение стрелками "
                   "(ui_left, ui_right, ui_up, ui_down) со скоростью 200 через move_and_slide. Прикрепи его к Player и сохрани сцену.",
+        },
         "check": c_script,
         "golden": [
             ("script_write", {"path": "{dir}/player.gd", "attach_to": "Player", "content":
@@ -347,8 +358,11 @@ TASKS = [
     {
         "id": "signal",
         "setup": t_signal_setup,
-        "prompt": "Сделай так, чтобы по нажатию кнопки StartButton в консоль печаталось \"Game started\". "
+        "prompt": {
+            "en": "Make the StartButton button print \"Game started\" to the console when pressed. Name the handler _on_start_button_pressed and put it in the root node script. Save the scene.",
+            "ru": "Сделай так, чтобы по нажатию кнопки StartButton в консоль печаталось \"Game started\". "
                   "Обработчик назови _on_start_button_pressed и положи в скрипт корневого узла. Сохрани сцену.",
+        },
         "check": c_signal,
         "golden": [
             ("signal_connect", {"from": "StartButton", "signal": "pressed", "to": ".", "method": "_on_start_button_pressed"}),
@@ -360,7 +374,10 @@ TASKS = [
     {
         "id": "fix",
         "setup": t_fix_setup,
-        "prompt": "В файле {dir}/broken.gd есть синтаксические ошибки. Найди и исправь их, не меняя логику.",
+        "prompt": {
+            "en": "The file {dir}/broken.gd has syntax errors. Find and fix them without changing the logic.",
+            "ru": "В файле {dir}/broken.gd есть синтаксические ошибки. Найди и исправь их, не меняя логику.",
+        },
         "check": c_fix,
         "golden": [
             ("script_edit", {"path": "{dir}/broken.gd", "old_text": "func _ready()", "new_text": "func _ready():"}),
@@ -370,7 +387,10 @@ TASKS = [
     {
         "id": "move",
         "setup": t_move_setup,
-        "prompt": "Перенеси узел Coin внутрь Level и переименуй его в GoldCoin. Удали всех врагов (узлы Enemy...), где бы они ни были. Сохрани.",
+        "prompt": {
+            "en": "Move the Coin node into Level and rename it to GoldCoin. Delete all enemies (Enemy... nodes) wherever they are. Save.",
+            "ru": "Перенеси узел Coin внутрь Level и переименуй его в GoldCoin. Удали всех врагов (узлы Enemy...), где бы они ни были. Сохрани.",
+        },
         "check": c_move,
         "golden": [
             ("node_move", {"path": "Coin", "new_parent": "Level", "new_name": "GoldCoin"}),
@@ -383,8 +403,11 @@ TASKS = [
     {
         "id": "props",
         "setup": t_props_setup,
-        "prompt": "Переключи Player в режим движения Floating (для вида сверху) и поставь ему z_index 5. "
+        "prompt": {
+            "en": "Switch Player to the Floating motion mode (for a top-down view) and set its z_index to 5. Move the Camera node inside Player and zoom it in 2x. Save.",
+            "ru": "Переключи Player в режим движения Floating (для вида сверху) и поставь ему z_index 5. "
                   "Камеру Camera перенеси внутрь Player и приблизь в 2 раза. Сохрани.",
+        },
         "check": c_props,
         "golden": [
             ("node_set", {"path": "Player", "properties": {"motion_mode": "Floating", "z_index": 5}}),
@@ -396,7 +419,10 @@ TASKS = [
     {
         "id": "run",
         "setup": t_run_setup,
-        "prompt": "Запусти текущую сцену и скажи, какое число игра печатает после CODE=. Потом останови игру.",
+        "prompt": {
+            "en": "Run the current scene and tell me which number the game prints after CODE=. Then stop the game.",
+            "ru": "Запусти текущую сцену и скажи, какое число игра печатает после CODE=. Потом останови игру.",
+        },
         "check": c_run,
         "golden": [
             ("game_run", {"scene": "current"}),
@@ -409,7 +435,10 @@ TASKS = [
     {
         "id": "debug",
         "setup": t_debug_setup,
-        "prompt": "Запусти текущую сцену, посмотри, какая ошибка возникает в игре, исправь её в скрипте и останови игру.",
+        "prompt": {
+            "en": "Run the current scene, see what error happens in the game, fix it in the script and stop the game.",
+            "ru": "Запусти текущую сцену, посмотри, какая ошибка возникает в игре, исправь её в скрипте и останови игру.",
+        },
         "check": c_debug,
         "golden": [
             ("game_run", {"scene": "current"}),
@@ -422,8 +451,11 @@ TASKS = [
     {
         "id": "class",
         "setup": t_class_setup,
-        "prompt": "Добавь подбираемый предмет: Area2D с именем Pickup с круглой формой коллизии. "
+        "prompt": {
+            "en": "Add a pickup item: an Area2D named Pickup with a circular collision shape. Connect its signal that fires when a physics body enters to the root node method _on_pickup_body_entered. Save.",
+            "ru": "Добавь подбираемый предмет: Area2D с именем Pickup с круглой формой коллизии. "
                   "Подключи его сигнал, который срабатывает при входе физического тела, к методу _on_pickup_body_entered корневого узла. Сохрани.",
+        },
         "check": c_class,
         "golden": [
             ("node_add", {"type": "Area2D", "name": "Pickup"}),
@@ -436,8 +468,11 @@ TASKS = [
         "id": "tilemap",
         "group": "tilemap",
         "setup": t_tilemap_setup,
-        "prompt": "Сделай уровень на тайлах: TileMapLayer с именем Ground, тайлсет из res://icon.svg с тайлами 32x32 и коллизией. "
+        "prompt": {
+            "en": "Make a tile level: a TileMapLayer named Ground with a tileset from res://icon.svg, 32x32 tiles with collision. Fill the floor with tile [0, 0] at y=6 from x=0 to x=11 and make a platform with tile [1, 0] at y=3 from x=4 to x=7. Save.",
+            "ru": "Сделай уровень на тайлах: TileMapLayer с именем Ground, тайлсет из res://icon.svg с тайлами 32x32 и коллизией. "
                   "Залей пол тайлом [0, 0] по y=6 от x=0 до x=11 и сделай платформу тайлом [1, 0] по y=3 от x=4 до x=7. Сохрани.",
+        },
         "check": c_tilemap,
         "golden": [
             ("tilemap_setup", {"path": "Ground", "texture": "res://icon.svg", "tile_size": [32, 32], "collision": True}),
@@ -450,8 +485,11 @@ TASKS = [
         "id": "anim",
         "group": "animation",
         "setup": t_anim_setup,
-        "prompt": "Сделай монетке Coin анимацию spin длиной 1 секунда, зацикленную и с автозапуском: "
+        "prompt": {
+            "en": "Give the Coin a 1-second animation spin, looped and autoplaying: rotation from 0 to 6.28 over the second, and at the same time position bounces from [100, 100] to [100, 90] at 0.5 s and back by 1 s. Save.",
+            "ru": "Сделай монетке Coin анимацию spin длиной 1 секунда, зацикленную и с автозапуском: "
                   "rotation от 0 до 6.28 за секунду, и одновременно position подпрыгивает с [100, 100] до [100, 90] на 0.5 с и обратно к 1 с. Сохрани.",
+        },
         "check": c_anim,
         "golden": [
             ("anim_create", {"name": "spin", "length": 1, "loop": True, "autoplay": True}),

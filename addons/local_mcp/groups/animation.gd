@@ -1,7 +1,9 @@
 @tool
 extends RefCounted
-## Группа «animation»: AnimationPlayer, анимации, дорожки свойств и ключи.
-## Правки идут через замену анимации в библиотеке, поэтому одна правка = один шаг Ctrl+Z.
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## Group "animation": AnimationPlayer, animations, property tracks and keys.
+## Edits replace the animation in its library, so one edit = one Ctrl+Z step.
 
 const Values := preload("res://addons/local_mcp/values.gd")
 
@@ -32,14 +34,14 @@ func _player(path, create: bool) -> Dictionary:
 	var f: Dictionary = t._find(p)
 	if f.has("node"):
 		if not f.node is AnimationPlayer:
-			return {"error": "%s это %s, а нужен AnimationPlayer" % [t._rel(f.node), f.node.get_class()]}
+			return {"error": L.t("%s is %s, but an AnimationPlayer is needed") % [t._rel(f.node), f.node.get_class()]}
 		return f
 	if not create:
 		var found: Array = t._root().find_children("*", "AnimationPlayer", true, false) if t._root() else []
 		var names: Array = []
 		for n in found:
 			names.append(t._rel(n))
-		return {"error": "AnimationPlayer \"%s\" не найден%s" % [p, (". Есть: " + ", ".join(names)) if not names.is_empty() else ". Создайте анимацию через anim_create"]}
+		return {"error": L.t("AnimationPlayer \"%s\" not found%s") % [p, (L.t(". Available: ") + ", ".join(names)) if not names.is_empty() else L.t(". Create an animation with anim_create")]}
 	var root: Node = t._root()
 	var parent: Node = root
 	p = p.trim_prefix("./")
@@ -60,7 +62,7 @@ func _player(path, create: bool) -> Dictionary:
 	return {"node": ap, "created": true}
 
 
-## Библиотека по умолчанию ("") создаётся при необходимости.
+## The default library ("") is created when needed.
 static func _library(ap: AnimationPlayer) -> AnimationLibrary:
 	if ap.has_animation_library(&""):
 		return ap.get_animation_library(&"")
@@ -69,7 +71,7 @@ static func _library(ap: AnimationPlayer) -> AnimationLibrary:
 	return lib
 
 
-## Находит анимацию по имени, в том числе "lib/name". Возвращает {lib, key, anim} или {error}.
+## Finds an animation by name, including "lib/name". Returns {lib, key, anim} or {error}.
 func _find_anim(ap: AnimationPlayer, name: String) -> Dictionary:
 	if ap.has_animation(name):
 		var lib_name := ""
@@ -79,10 +81,10 @@ func _find_anim(ap: AnimationPlayer, name: String) -> Dictionary:
 			key = name.substr(lib_name.length() + 1)
 		return {"lib": ap.get_animation_library(lib_name), "key": key, "anim": ap.get_animation(name)}
 	var list := Array(ap.get_animation_list())
-	return {"error": "нет анимации \"%s\" в %s. Есть: %s" % [name, t._rel(ap), ", ".join(list) if not list.is_empty() else "ни одной (создайте через anim_create)"]}
+	return {"error": L.t("no animation \"%s\" in %s. Available: %s") % [name, t._rel(ap), ", ".join(list) if not list.is_empty() else L.t("none (create one with anim_create)")]}
 
 
-## Замена анимации в библиотеке целиком: так undo простой и надёжный.
+## Replaces the whole animation in the library: this keeps undo simple and reliable.
 func _commit_anim(lib: AnimationLibrary, key: String, new_anim: Animation, old_anim, label: String) -> void:
 	var ur: EditorUndoRedoManager = t._ur()
 	ur.create_action("MCP: " + label, UndoRedo.MERGE_DISABLE, t._root())
@@ -104,7 +106,7 @@ func _t_anim_create(args: Dictionary) -> Dictionary:
 	var ap: AnimationPlayer = pf.node
 	var name := str(args.name).strip_edges()
 	if name == "" or name.contains("/") or name.contains(":"):
-		return t._err("имя анимации без / и :, например \"walk\"")
+		return t._err(L.t("animation name without / and :, e.g. \"walk\""))
 	var lib := _library(ap)
 	var old: Animation = lib.get_animation(name) if lib.has_animation(name) else null
 	var anim: Animation = old.duplicate(true) if old else Animation.new()
@@ -112,7 +114,7 @@ func _t_anim_create(args: Dictionary) -> Dictionary:
 		anim.length = maxf(float(args.get("length", 1.0)), 0.001)
 	if args.has("loop"):
 		anim.loop_mode = Animation.LOOP_LINEAR if bool(args.loop) else Animation.LOOP_NONE
-	_commit_anim(lib, name, anim, old, "анимация " + name)
+	_commit_anim(lib, name, anim, old, L.t("animation ") + name)
 	var extra := ""
 	if bool(args.get("autoplay", false)):
 		var ur: EditorUndoRedoManager = t._ur()
@@ -121,9 +123,9 @@ func _t_anim_create(args: Dictionary) -> Dictionary:
 		ur.add_undo_property(ap, "autoplay", ap.autoplay)
 		ur.commit_action()
 		extra = ", autoplay"
-	return t._ok("%s анимация \"%s\" в %s%s: длина %s c, %s%s" % [
-		"Обновлена" if old else "Создана", name, t._rel(ap), " (плеер создан)" if pf.get("created", false) else "",
-		Values._n(anim.length), "зациклена" if anim.loop_mode != Animation.LOOP_NONE else "без цикла", extra])
+	return t._ok(L.t("%s animation \"%s\" in %s%s: length %s s, %s%s") % [
+		L.t("Updated") if old else L.t("Added"), name, t._rel(ap), L.t(" (player created)") if pf.get("created", false) else "",
+		Values._n(anim.length), L.t("looped") if anim.loop_mode != Animation.LOOP_NONE else L.t("no loop"), extra])
 
 
 func _t_anim_key(args: Dictionary) -> Dictionary:
@@ -145,14 +147,14 @@ func _t_anim_key(args: Dictionary) -> Dictionary:
 		prop = prop.to_snake_case()
 	if not Values.has_property(target, prop):
 		var sim: String = t._similar_props(target, prop)
-		return t._err("у %s нет свойства \"%s\"%s" % [target.get_class(), prop, (" (похожие: " + sim + ")") if sim != "" else ""])
+		return t._err(L.t("%s has no property \"%s\"%s") % [target.get_class(), prop, (L.t(" (similar: ") + sim + ")") if sim != "" else ""])
 	var raw_keys = args.keys
 	if raw_keys is String:
 		raw_keys = JSON.parse_string(raw_keys)
 	if raw_keys is Dictionary:
 		raw_keys = [raw_keys]
 	if not raw_keys is Array or raw_keys.is_empty():
-		return t._err("keys: список вида [{\"time\": 0, \"value\": ...}, ...]")
+		return t._err(L.t("keys: a list like [{\"time\": 0, \"value\": ...}, ...]"))
 	var keys: Array = []
 	for k in raw_keys:
 		var time_v = null
@@ -164,15 +166,15 @@ func _t_anim_key(args: Dictionary) -> Dictionary:
 			time_v = k[0]
 			value_v = k[1]
 		if time_v == null or not str(time_v).is_valid_float():
-			return t._err("у каждого ключа нужны time (секунды) и value, например {\"time\": 0.5, \"value\": [0, -10]}")
+			return t._err(L.t("each key needs time (seconds) and value, e.g. {\"time\": 0.5, \"value\": [0, -10]}"))
 		var c := Values.coerce_for(target, prop, value_v)
 		if not c.ok:
-			return t._err("value в ключе %s: %s" % [str(time_v), c.error])
+			return t._err(L.t("value in key %s: %s") % [str(time_v), c.error])
 		keys.append([float(time_v), c.value])
 
 	var root_node: Node = ap.get_node_or_null(ap.root_node)
 	if root_node == null:
-		return t._err("у %s неверный root_node" % t._rel(ap))
+		return t._err(L.t("%s has an invalid root_node") % t._rel(ap))
 	var track_path := NodePath(str(root_node.get_path_to(target)) + ":" + prop)
 	var anim: Animation = (fa.anim as Animation).duplicate(true)
 	var idx := anim.find_track(track_path, Animation.TYPE_VALUE)
@@ -180,7 +182,7 @@ func _t_anim_key(args: Dictionary) -> Dictionary:
 	if new_track:
 		idx = anim.add_track(Animation.TYPE_VALUE)
 		anim.track_set_path(idx, track_path)
-		# Дискретные свойства (frame, visible, текст) обновляем скачком, а не плавно.
+		# Discrete properties (frame, visible, text) update in steps, not smoothly.
 		var vt := typeof(keys[0][1])
 		if vt in [TYPE_BOOL, TYPE_INT, TYPE_STRING, TYPE_OBJECT, TYPE_STRING_NAME]:
 			anim.value_track_set_update_mode(idx, Animation.UPDATE_DISCRETE)
@@ -189,7 +191,7 @@ func _t_anim_key(args: Dictionary) -> Dictionary:
 		var mode: int = {"nearest": Animation.INTERPOLATION_NEAREST, "linear": Animation.INTERPOLATION_LINEAR,
 			"cubic": Animation.INTERPOLATION_CUBIC}.get(interp, -1)
 		if mode == -1:
-			return t._err("interpolation: linear, nearest или cubic")
+			return t._err(L.t("interpolation: linear, nearest or cubic"))
 		anim.track_set_interpolation_type(idx, mode)
 	var max_time := 0.0
 	for k in keys:
@@ -201,12 +203,12 @@ func _t_anim_key(args: Dictionary) -> Dictionary:
 	var note := ""
 	if max_time > anim.length:
 		anim.length = max_time
-		note = "; длина анимации увеличена до %s c" % Values._n(max_time)
-	_commit_anim(fa.lib, fa.key, anim, fa.anim, "ключи " + prop)
+		note = L.t("; animation length extended to %s s") % Values._n(max_time)
+	_commit_anim(fa.lib, fa.key, anim, fa.anim, L.t("keys ") + prop)
 	var shown: Array = []
 	for k in keys:
-		shown.append("%s c: %s" % [Values._n(k[0]), Values.show(k[1])])
-	return t._ok("%s дорожка %s в \"%s\": %s%s" % ["Новая" if new_track else "Обновлена", str(track_path), str(args.animation),
+		shown.append("%s s: %s" % [Values._n(k[0]), Values.show(k[1])])
+	return t._ok(L.t("%s track %s in \"%s\": %s%s") % [L.t("New") if new_track else L.t("Updated"), str(track_path), str(args.animation),
 		"; ".join(shown), note])
 
 
@@ -222,21 +224,21 @@ func _t_anim_info(args: Dictionary) -> Dictionary:
 	if name == "":
 		var list := Array(ap.get_animation_list())
 		if list.is_empty():
-			lines.append("Анимаций нет")
+			lines.append(L.t("No animations"))
 		for a in list:
 			var anim := ap.get_animation(a)
-			lines.append("  %s: %s c, %s, дорожек %d" % [a, Values._n(anim.length), "цикл" if anim.loop_mode != Animation.LOOP_NONE else "без цикла", anim.get_track_count()])
+			lines.append(L.t("  %s: %s s, %s, %d tracks") % [a, Values._n(anim.length), L.t("loop") if anim.loop_mode != Animation.LOOP_NONE else L.t("no loop"), anim.get_track_count()])
 		return t._ok("\n".join(lines))
 	var fa := _find_anim(ap, name)
 	if fa.has("error"):
 		return t._err(fa.error)
 	var anim: Animation = fa.anim
-	lines.append("\"%s\": %s c, %s" % [name, Values._n(anim.length), "цикл" if anim.loop_mode != Animation.LOOP_NONE else "без цикла"])
+	lines.append(L.t("\"%s\": %s s, %s") % [name, Values._n(anim.length), L.t("loop") if anim.loop_mode != Animation.LOOP_NONE else L.t("no loop")])
 	for i in anim.get_track_count():
 		var keys: Array = []
 		for k in mini(anim.track_get_key_count(i), 20):
 			keys.append("%s: %s" % [Values._n(anim.track_get_key_time(i, k)), Values.show(anim.track_get_key_value(i, k))])
-		lines.append("  %s%s: %s" % [str(anim.track_get_path(i)), "" if anim.track_get_type(i) == Animation.TYPE_VALUE else " (тип %d)" % anim.track_get_type(i), "; ".join(keys)])
+		lines.append("  %s%s: %s" % [str(anim.track_get_path(i)), "" if anim.track_get_type(i) == Animation.TYPE_VALUE else L.t(" (type %d)") % anim.track_get_type(i), "; ".join(keys)])
 	if anim.get_track_count() == 0:
-		lines.append("  дорожек нет, добавьте через anim_key")
+		lines.append(L.t("  no tracks, add some with anim_key"))
 	return t._ok("\n".join(lines))

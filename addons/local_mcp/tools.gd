@@ -1,18 +1,20 @@
 @tool
 extends RefCounted
-## Набор инструментов ядра. Принципы:
-## - плоские схемы, короткие описания (каждый инструмент ~100-150 токенов);
-## - прощающий разбор аргументов (синонимы имён, значения в любом разумном формате);
-## - ответы короткие и текстовые, ошибка = одна строка "что не так + как исправить";
-## - все правки сцены идут через UndoRedo, пользователь может откатить Ctrl+Z.
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## Core tool set. Principles:
+## - flat schemas, short descriptions (~100-150 tokens per tool);
+## - forgiving argument parsing (name aliases, values in any reasonable format);
+## - short text replies; an error is one line: "what is wrong + how to fix it";
+## - every scene edit goes through UndoRedo, so the user can revert it with Ctrl+Z.
 
 const Values := preload("res://addons/local_mcp/values.gd")
 
-const MAX_SCRIPT_READ := 400  # строк за один вызов script_read
+const MAX_SCRIPT_READ := 400  # lines per script_read call
 const MAX_TREE_LINES := 250
 const MAX_OUTPUT_LINES := 200
 
-## Синонимы аргументов: локальные модели часто называют поля по-своему.
+## Argument aliases: local models often name fields their own way.
 const ALIASES := {
 	"path": ["node_path", "node", "target", "file", "file_path", "script_path", "scene_path"],
 	"parent": ["parent_path", "parent_node"],
@@ -41,15 +43,15 @@ const ALIASES := {
 	"keys": ["keyframes", "frames"],
 }
 
-## Подключаемые группы: имя -> скрипт. Включаются в настройках проекта local_mcp/groups/<имя>
-## или переменной окружения LOCAL_MCP_GROUPS="tilemap,animation" (удобно для стенда).
+## Optional groups: name -> script. Enabled in Project Settings local_mcp/groups/<name>
+## or with the env variable LOCAL_MCP_GROUPS="tilemap,animation" (handy for the bench).
 const GROUPS := {
 	"tilemap": "res://addons/local_mcp/groups/tilemap.gd",
 	"animation": "res://addons/local_mcp/groups/animation.gd",
 }
 
 var _plugin: EditorPlugin
-var _groups := {}  # имя -> объект группы
+var _groups := {}  # name -> group object
 var _logger: Object = null
 var _defs: Array = []
 var _last_run_ms := 0
@@ -81,7 +83,7 @@ func teardown() -> void:
 	_plugin = null
 
 
-# ─────────────────────────── описание инструментов ───────────────────────────
+# ─────────────────────────── tool definitions ───────────────────────────
 
 static func _s(t: String, d: String = "") -> Dictionary:
 	var out := {"type": t}
@@ -152,7 +154,7 @@ func list_tools() -> Array:
 	return out
 
 
-## Включённые группы. Читается при каждом tools/list: включили галочку — переподключите клиента.
+## Enabled groups. Read on every tools/list: after ticking a box, reconnect the client.
 func enabled_groups() -> Array:
 	var out: Array = []
 	var env := OS.get_environment("LOCAL_MCP_GROUPS").to_lower()
@@ -162,9 +164,10 @@ func enabled_groups() -> Array:
 	return out
 
 
-# ─────────────────────────── диспетчер ───────────────────────────
+# ─────────────────────────── dispatcher ───────────────────────────
 
 func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
+	L.refresh()
 	var def := {}
 	var all_defs := list_tools()
 	for d in all_defs:
@@ -175,15 +178,15 @@ func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 		for g in _groups:
 			for d in _groups[g].defs():
 				if d.name == name:
-					return _err("инструмент %s из группы \"%s\", она выключена. Включите local_mcp/groups/%s в настройках проекта и переподключите клиента" % [name, g, g])
+					return _err(L.t("tool %s belongs to group \"%s\", which is disabled. Enable local_mcp/groups/%s in Project Settings and reconnect the client") % [name, g, g])
 		var names: Array = []
 		for d in all_defs:
 			names.append(d.name)
-		return _err("нет инструмента \"%s\". Есть: %s" % [name, ", ".join(names)])
+		return _err(L.t("no tool \"%s\". Available: %s") % [name, ", ".join(names)])
 	var args := _normalize_args(raw_args, def.inputSchema.properties)
 	for req in def.inputSchema.required:
 		if not args.has(req) or (args[req] is String and args[req] == "" and req != "new_text" and req != "content"):
-			return _err("не хватает аргумента \"%s\" (обязательные: %s)" % [req, ", ".join(def.inputSchema.required)])
+			return _err(L.t("missing argument \"%s\" (required: %s)") % [req, ", ".join(def.inputSchema.required)])
 	var fn := "_t_" + name
 	var target: Object = self if has_method(fn) else null
 	if target == null:
@@ -191,9 +194,9 @@ func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 			if _groups[g].has_method(fn):
 				target = _groups[g]
 	if target == null:
-		return _err("инструмент не реализован: " + name)
-	# В GDScript нет try/catch: при ошибке выполнения call() вернёт null, и раньше модель
-	# получала пустой «успешный» ответ. Теперь это явная ошибка с текстом из лога.
+		return _err(L.t("tool not implemented: ") + name)
+	# GDScript has no try/catch: on a runtime error call() returns null, and the model used to
+	# get an empty "success". Now it is an explicit error with the text from the log.
 	var mark: int = _logger.mark() if _logger else 0
 	var res = target.call(fn, args)
 	if res is Dictionary and res.has("text"):
@@ -202,11 +205,11 @@ func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 	if _logger:
 		for l in _logger.since(mark):
 			why.append(_clean_err(l))
-	return _err("внутренняя ошибка инструмента %s%s. Попробуйте другие аргументы; если повторяется, это баг плагина" % [
+	return _err(L.t("internal error in tool %s%s. Try other arguments; if it keeps happening, it is a plugin bug") % [
 		name, (": " + "; ".join(why.slice(0, 3))) if not why.is_empty() else ""])
 
 
-## Переименовывает синонимы в канонические имена, приводит числа и булевы.
+## Renames aliases to canonical names, coerces numbers and booleans.
 func _normalize_args(raw: Dictionary, schema_props: Dictionary) -> Dictionary:
 	var known: Array = schema_props.keys()
 	var out := {}
@@ -219,7 +222,7 @@ func _normalize_args(raw: Dictionary, schema_props: Dictionary) -> Dictionary:
 			if out.has(alias) and not alias in known:
 				out[canon] = out[alias]
 				break
-	# Приведение по типу из схемы: модели присылают "True", "1", "[32, 32]" строками.
+	# Coerce by schema type: models send "True", "1", "[32, 32]" as strings.
 	for k in out.keys():
 		if not schema_props.has(k):
 			continue
@@ -228,7 +231,7 @@ func _normalize_args(raw: Dictionary, schema_props: Dictionary) -> Dictionary:
 		match want:
 			"boolean":
 				if v is String:
-					out[k] = (v as String).strip_edges().to_lower() in ["true", "1", "yes", "on", "да"]
+					out[k] = (v as String).strip_edges().to_lower() in ["true", "1", "yes", "y", "on", "да", "sí", "si", "ja", "oui", "sim", "是", "はい"]
 				elif v is float or v is int:
 					out[k] = v != 0
 				elif v == null:
@@ -254,10 +257,10 @@ static func _ok(text: String) -> Dictionary:
 
 
 static func _err(text: String) -> Dictionary:
-	return {"text": "Ошибка: " + text, "error": true}
+	return {"text": L.t("Error: ") + text, "error": true}
 
 
-# ─────────────────────────── общие помощники ───────────────────────────
+# ─────────────────────────── shared helpers ───────────────────────────
 
 func _root() -> Node:
 	return EditorInterface.get_edited_scene_root()
@@ -268,7 +271,7 @@ func _ur() -> EditorUndoRedoManager:
 
 
 func _no_scene() -> Dictionary:
-	return _err("нет открытой сцены. Откройте её через scene_open или создайте через scene_new")
+	return _err(L.t("no scene is open. Open one with scene_open or create one with scene_new"))
 
 
 func _rel(node: Node) -> String:
@@ -278,17 +281,17 @@ func _rel(node: Node) -> String:
 	return str(root.get_path_to(node))
 
 
-## Для сообщений: корень показываем по имени, а не точкой.
+## For messages: show the root by name, not as a dot.
 func _label(node: Node) -> String:
 	return str(node.name) if node == _root() else _rel(node)
 
 
-## Ищет узел по пути с поблажками: ".", имя корня, "./A/B", "Root/A/B", "/root/Root/A".
-## Возвращает {"node": Node} или {"error": "..."} с подсказкой, какие узлы есть рядом.
+## Finds a node by a lenient path: ".", the root name, "./A/B", "Root/A/B", "/root/Root/A".
+## Returns {"node": Node} or {"error": "..."} with a hint about nearby nodes.
 func _find(path) -> Dictionary:
 	var root := _root()
 	if root == null:
-		return {"error": _no_scene().text.trim_prefix("Ошибка: ")}
+		return {"error": _no_scene().text.trim_prefix(L.t("Error: "))}
 	var p := str(path if path != null else ".").strip_edges().replace("\\", "/")
 	if p.begins_with("/root/"):
 		p = p.substr(6)
@@ -304,11 +307,11 @@ func _find(path) -> Dictionary:
 	var n := root.get_node_or_null(p)
 	if n:
 		return {"node": n}
-	# Уникальное имя где-то в глубине?
+	# A unique name somewhere deeper?
 	var by_name := root.find_children(p.get_file(), "", true, false)
 	if by_name.size() == 1 and not p.contains("/"):
 		return {"node": by_name[0]}
-	# Подсказка: дети ближайшего существующего предка.
+	# Hint: children of the nearest existing ancestor.
 	var parts := p.split("/")
 	var cur: Node = root
 	for part in parts:
@@ -319,20 +322,20 @@ func _find(path) -> Dictionary:
 	var kids: Array = []
 	for c in cur.get_children():
 		kids.append(str(c.name))
-	var near := "у \"%s\" нет детей" % _rel(cur) if kids.is_empty() else "дети \"%s\": %s" % [_rel(cur), ", ".join(kids.slice(0, 20))]
-	return {"error": "узел \"%s\" не найден; %s" % [str(path), near]}
+	var near := L.t("\"%s\" has no children") % _rel(cur) if kids.is_empty() else L.t("children of \"%s\": %s") % [_rel(cur), ", ".join(kids.slice(0, 20))]
+	return {"error": L.t("node \"%s\" not found; %s") % [str(path), near]}
 
 
 func _res_path(p) -> Dictionary:
 	var s := str(p if p != null else "").strip_edges().replace("\\", "/")
 	if s == "":
-		return {"error": "пустой путь"}
+		return {"error": L.t("empty path")}
 	if not s.begins_with("res://"):
 		s = "res://" + s.trim_prefix("/")
 	if s.contains("/../") or s.ends_with("/..") or s.begins_with("res://.."):
-		return {"error": "путь не может выходить за пределы проекта"}
+		return {"error": L.t("path cannot leave the project")}
 	if s.begins_with("res://addons/local_mcp/") or s.begins_with("res://.godot/"):
-		return {"error": "эта папка защищена"}
+		return {"error": L.t("this folder is protected")}
 	return {"path": s}
 
 
@@ -348,7 +351,7 @@ func _fs_update(path: String) -> void:
 		fs.update_file(path)
 
 
-## Подбирает похожие имена свойств для подсказки.
+## Finds similar property names for a hint.
 static func _similar_props(obj: Object, wanted: String) -> String:
 	var names: Array = []
 	for p in obj.get_property_list():
@@ -357,7 +360,7 @@ static func _similar_props(obj: Object, wanted: String) -> String:
 	return ", ".join(_similar(names, wanted, 6))
 
 
-## Ближайшие по написанию строки (опечатки моделей: positon, Charakter).
+## Closest strings by spelling (model typos: positon, Charakter).
 static func _similar(names: Array, wanted: String, limit: int) -> Array:
 	var w := wanted.to_lower().replace("_", "")
 	var scored: Array = []
@@ -375,13 +378,13 @@ static func _similar(names: Array, wanted: String, limit: int) -> Array:
 	return out
 
 
-## camelCase -> snake_case, частая ошибка моделей ("modulateColor", "zIndex").
+## camelCase -> snake_case, a common model mistake ("modulateColor", "zIndex").
 static func _snake(s: String) -> String:
 	return s.to_snake_case() if s != s.to_lower() else s
 
 
 func _set_props(node: Node, props: Dictionary, ur: EditorUndoRedoManager) -> Array:
-	## Возвращает [applied: Array[String], failed: Array[String]].
+	## Returns [applied: Array[String], failed: Array[String]].
 	var applied: Array = []
 	var failed: Array = []
 	for key in props:
@@ -389,11 +392,11 @@ func _set_props(node: Node, props: Dictionary, ur: EditorUndoRedoManager) -> Arr
 		if not Values.has_property(node, prop) and Values.has_property(node, _snake(prop)):
 			prop = _snake(prop)
 		if prop == "script":
-			failed.append("script: используйте script_write с attach_to или node_add")
+			failed.append(L.t("script: use script_write with attach_to, or node_add"))
 			continue
 		if not Values.has_property(node, prop):
 			var sim := _similar_props(node, prop)
-			failed.append("%s: у %s нет такого свойства%s" % [prop, node.get_class(), (" (похожие: " + sim + ")") if sim != "" else ""])
+			failed.append(L.t("%s: %s has no such property%s") % [prop, node.get_class(), (L.t(" (similar: ") + sim + ")") if sim != "" else ""])
 			continue
 		var c := Values.coerce_for(node, prop, props[key])
 		if not c.ok:
@@ -420,7 +423,7 @@ func _report_props(node: Node, applied: Array) -> String:
 	return ", ".join(parts)
 
 
-## Значение свойства для ответа; у enum показываем имя.
+## Property value for a reply; enums are shown by name.
 func _show_prop(node: Node, prop: String, v) -> String:
 	if typeof(v) == TYPE_INT:
 		var info := Values.property_info(node, prop)
@@ -435,7 +438,7 @@ func _show_prop(node: Node, prop: String, v) -> String:
 	return Values.show(v)
 
 
-## Узлы поддерева, принадлежащие сцене (нужно, чтобы восстановить owner после undo).
+## Subtree nodes owned by the scene (needed to restore owner after undo).
 func _owned(node: Node, root: Node) -> Array:
 	var out: Array = []
 	for c in node.get_children():
@@ -451,32 +454,32 @@ func _set_owners(nodes: Array, owner: Node) -> void:
 			n.owner = owner
 
 
-# ─────────────────────────── инструменты: проект и сцена ───────────────────────────
+# ─────────────────────────── tools: project and scene ───────────────────────────
 
 func _t_project_info(args: Dictionary) -> Dictionary:
 	var lines: Array = []
-	lines.append("Проект: %s" % ProjectSettings.get_setting("application/config/name", "?"))
+	lines.append(L.t("Project: %s") % ProjectSettings.get_setting("application/config/name", "?"))
 	var v := Engine.get_version_info()
 	lines.append("Godot: %d.%d.%d" % [v.major, v.minor, v.patch])
-	lines.append("Главная сцена: %s" % (ProjectSettings.get_setting("application/run/main_scene", "") if ProjectSettings.get_setting("application/run/main_scene", "") != "" else "не задана"))
+	lines.append(L.t("Main scene: %s") % (ProjectSettings.get_setting("application/run/main_scene", "") if ProjectSettings.get_setting("application/run/main_scene", "") != "" else L.t("not set")))
 	var root := _root()
-	lines.append("Открыта сцена: %s" % (root.scene_file_path if root and root.scene_file_path != "" else ("несохранённая" if root else "нет")))
+	lines.append(L.t("Open scene: %s") % (root.scene_file_path if root and root.scene_file_path != "" else (L.t("unsaved") if root else L.t("none"))))
 	var autoloads: Array = []
 	for prop in ProjectSettings.get_property_list():
 		var n: String = prop.name
 		if n.begins_with("autoload/"):
 			autoloads.append(n.substr(9))
 	if not autoloads.is_empty():
-		lines.append("Автозагрузки: " + ", ".join(autoloads))
+		lines.append(L.t("Autoloads: ") + ", ".join(autoloads))
 	var filter: String = str(args.get("filter", ""))
 	var files: Array = []
 	_collect_files("res://", files, filter)
 	files.sort()
-	lines.append("Файлы (%d):" % files.size())
+	lines.append(L.t("Files (%d):") % files.size())
 	for f in files.slice(0, 200):
 		lines.append("  " + f)
 	if files.size() > 200:
-		lines.append("  …и ещё %d, уточните filter" % (files.size() - 200))
+		lines.append(L.t("  …and %d more, narrow it with filter") % (files.size() - 200))
 	return _ok("\n".join(lines))
 
 
@@ -505,11 +508,11 @@ func _t_scene_tree(args: Dictionary) -> Dictionary:
 	var lines: Array = []
 	_tree_lines(f.node, 0, depth, lines)
 	var root := _root()
-	var header := "Сцена %s" % (root.scene_file_path if root.scene_file_path != "" else "(не сохранена)")
+	var header := L.t("Scene %s") % (root.scene_file_path if root.scene_file_path != "" else L.t("(not saved)"))
 	if lines.size() > MAX_TREE_LINES:
 		var extra := lines.size() - MAX_TREE_LINES
 		lines = lines.slice(0, MAX_TREE_LINES)
-		lines.append("…ещё %d узлов, используйте path или depth" % extra)
+		lines.append(L.t("…%d more nodes, use path or depth") % extra)
 	return _ok(header + "\n" + "\n".join(lines))
 
 
@@ -526,14 +529,14 @@ func _tree_lines(node: Node, level: int, max_depth: int, out: Array) -> void:
 	if not extras.is_empty():
 		line += " [" + ", ".join(extras) + "]"
 	out.append(line)
-	# Внутренности инстанса сцены не разворачиваем: модель их не редактирует.
+	# Do not expand the insides of a scene instance: the model does not edit them.
 	if level >= max_depth or (node != _root() and node.scene_file_path != ""):
 		if node.get_child_count() > 0 and level >= max_depth:
-			out.append("  ".repeat(level + 1) + "…%d детей" % node.get_child_count())
+			out.append("  ".repeat(level + 1) + L.t("…%d children") % node.get_child_count())
 		return
 	for c in node.get_children():
 		if c.owner == null and c != _root():
-			continue  # внутренние узлы редактора
+			continue  # internal editor nodes
 		_tree_lines(c, level + 1, max_depth, out)
 
 
@@ -542,9 +545,9 @@ func _t_scene_open(args: Dictionary) -> Dictionary:
 	if r.has("error"):
 		return _err(r.error)
 	if not ResourceLoader.exists(r.path):
-		return _err("сцена не найдена: %s. Создайте её через scene_new" % r.path)
+		return _err(L.t("scene not found: %s. Create it with scene_new") % r.path)
 	EditorInterface.open_scene_from_path(r.path)
-	return _ok("Открыта %s" % r.path)
+	return _ok(L.t("Opened %s") % r.path)
 
 
 func _t_scene_new(args: Dictionary) -> Dictionary:
@@ -555,12 +558,12 @@ func _t_scene_new(args: Dictionary) -> Dictionary:
 	if path.get_extension() != "tscn":
 		path = path.get_basename() + ".tscn"
 	if FileAccess.file_exists(path):
-		return _err("файл %s уже есть. Откройте его через scene_open" % path)
+		return _err(L.t("file %s already exists. Open it with scene_open") % path)
 	var type: String = str(args.get("type", "Node2D"))
 	if type == "":
 		type = "Node2D"
 	if not ClassDB.class_exists(type) or not ClassDB.is_parent_class(type, "Node") or not ClassDB.can_instantiate(type):
-		return _err("\"%s\" не класс узла. Примеры: Node2D, Node3D, Control, CharacterBody2D" % type)
+		return _err(L.t("\"%s\" is not a node class. Examples: Node2D, Node3D, Control, CharacterBody2D") % type)
 	var root: Node = ClassDB.instantiate(type)
 	var name := str(args.get("name", ""))
 	var root_name := name.validate_node_name() if name != "" else path.get_file().get_basename().to_pascal_case()
@@ -571,10 +574,10 @@ func _t_scene_new(args: Dictionary) -> Dictionary:
 	var err := ResourceSaver.save(packed, path)
 	root.free()
 	if err != OK:
-		return _err("не удалось сохранить %s (код %d)" % [path, err])
+		return _err(L.t("could not save %s (code %d)") % [path, err])
 	_fs_update(path)
 	EditorInterface.open_scene_from_path(path)
-	return _ok("Создана и открыта %s, корень %s (%s)" % [path, root_name, type])
+	return _ok(L.t("Created and opened %s, root %s (%s)") % [path, root_name, type])
 
 
 func _t_scene_save(_args: Dictionary) -> Dictionary:
@@ -582,14 +585,14 @@ func _t_scene_save(_args: Dictionary) -> Dictionary:
 	if root == null:
 		return _no_scene()
 	if root.scene_file_path == "":
-		return _err("сцена ещё не сохранялась. Создавайте сцены через scene_new")
+		return _err(L.t("scene has never been saved. Create scenes with scene_new"))
 	var err := EditorInterface.save_scene()
 	if err != OK:
-		return _err("не удалось сохранить (код %d)" % err)
-	return _ok("Сохранено: " + root.scene_file_path)
+		return _err(L.t("could not save (code %d)") % err)
+	return _ok(L.t("Saved: ") + root.scene_file_path)
 
 
-# ─────────────────────────── инструменты: узлы ───────────────────────────
+# ─────────────────────────── tools: nodes ───────────────────────────
 
 func _t_node_add(args: Dictionary) -> Dictionary:
 	var root := _root()
@@ -597,7 +600,7 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 		return _no_scene()
 	var pf := _find(args.get("parent", "."))
 	if pf.has("error"):
-		return _err("родитель: " + pf.error)
+		return _err(L.t("parent: ") + pf.error)
 	var parent: Node = pf.node
 	var type := str(args.type).strip_edges()
 	var node: Node = null
@@ -606,21 +609,21 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 		if r.has("error"):
 			return _err(r.error)
 		if not ResourceLoader.exists(r.path):
-			return _err("сцена не найдена: " + r.path)
+			return _err(L.t("scene not found: ") + r.path)
 		var packed: PackedScene = load(r.path)
 		if r.path == root.scene_file_path:
-			return _err("нельзя вставить сцену саму в себя")
+			return _err(L.t("cannot instance a scene inside itself"))
 		node = packed.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
 	elif ClassDB.class_exists(type):
 		if not ClassDB.is_parent_class(type, "Node"):
-			return _err("%s не узел (это %s). Ресурсы задаются через node_set, например {\"shape\": {\"type\": \"%s\"}}" % [type, ClassDB.get_parent_class(type), type])
+			return _err(L.t("%s is not a node (it is %s). Set resources with node_set, e.g. {\"shape\": {\"type\": \"%s\"}}") % [type, ClassDB.get_parent_class(type), type])
 		if not ClassDB.can_instantiate(type):
-			return _err("%s абстрактный класс, выберите наследника" % type)
+			return _err(L.t("%s is an abstract class, pick a subclass") % type)
 		node = ClassDB.instantiate(type)
 	else:
 		var script_path := _global_class_path(type)
 		if script_path == "":
-			return _err("неизвестный тип \"%s\". Это не класс Godot, не class_name из скриптов и не .tscn" % type)
+			return _err(L.t("unknown type \"%s\". It is not a Godot class, a script class_name or a .tscn") % type)
 		var scr: Script = load(script_path)
 		node = ClassDB.instantiate(scr.get_instance_base_type())
 		node.set_script(scr)
@@ -631,25 +634,25 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 		node.name = type.get_file().get_basename() if type.contains("/") else type
 
 	var ur := _ur()
-	ur.create_action("MCP: добавить " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+	ur.create_action(L.t("MCP: add ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 	ur.add_do_method(parent, "add_child", node, true)
 	ur.add_do_method(node, "set_owner", root)
 	ur.add_do_reference(node)
 	ur.add_undo_method(parent, "remove_child", node)
 	ur.commit_action()
 
-	var msg := "Добавлен %s (%s) в %s" % [_rel(node), node.get_class(), _rel(parent)]
+	var msg := L.t("Added %s (%s) to %s") % [_rel(node), node.get_class(), _rel(parent)]
 	if wanted_name != "" and str(node.name) != wanted_name.validate_node_name():
-		msg += "; имя было занято, выдано " + str(node.name)
+		msg += L.t("; the name was taken, got ") + str(node.name)
 	var props = args.get("properties", {})
 	if props is Dictionary and not props.is_empty():
-		ur.create_action("MCP: свойства " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+		ur.create_action(L.t("MCP: properties ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 		var res := _set_props(node, props, ur)
 		ur.commit_action()
 		if not res[0].is_empty():
-			msg += "\nСвойства: " + _report_props(node, res[0])
+			msg += L.t("\nProperties: ") + _report_props(node, res[0])
 		if not res[1].is_empty():
-			msg += "\nНе применено: " + "; ".join(res[1])
+			msg += L.t("\nNot applied: ") + "; ".join(res[1])
 	return _ok(msg)
 
 
@@ -669,9 +672,9 @@ func _t_node_info(args: Dictionary) -> Dictionary:
 	lines.append("%s (%s)" % [_rel(node), node.get_class()])
 	var scr: Script = node.get_script()
 	if scr:
-		lines.append("Скрипт: " + (scr.resource_path if scr.resource_path != "" else "встроенный"))
+		lines.append(L.t("Script: ") + (scr.resource_path if scr.resource_path != "" else L.t("built-in")))
 	if node.scene_file_path != "" and node != _root():
-		lines.append("Инстанс сцены: " + node.scene_file_path)
+		lines.append(L.t("Scene instance: ") + node.scene_file_path)
 	var changed: Array = []
 	for p in node.get_property_list():
 		if not (p.usage & PROPERTY_USAGE_STORAGE) or not (p.usage & PROPERTY_USAGE_EDITOR):
@@ -690,7 +693,7 @@ func _t_node_info(args: Dictionary) -> Dictionary:
 		if cur == null and def == null:
 			continue
 		changed.append("  %s = %s" % [n, _show_prop(node, n, cur)])
-	lines.append("Изменённые свойства:" if not changed.is_empty() else "Изменённых свойств нет")
+	lines.append(L.t("Changed properties:") if not changed.is_empty() else L.t("No changed properties"))
 	lines.append_array(changed.slice(0, 60))
 	var conns: Array = []
 	for sig in node.get_signal_list():
@@ -700,14 +703,14 @@ func _t_node_info(args: Dictionary) -> Dictionary:
 				var tname := _rel(target) if target is Node and _root().is_ancestor_of(target) or target == _root() else "?"
 				conns.append("  %s -> %s.%s" % [sig.name, tname, (c.callable as Callable).get_method()])
 	if not conns.is_empty():
-		lines.append("Сигналы:")
+		lines.append(L.t("Signals:"))
 		lines.append_array(conns)
 	var kids: Array = []
 	for c in node.get_children():
 		if c.owner != null:
 			kids.append("%s (%s)" % [c.name, c.get_class()])
 	if not kids.is_empty():
-		lines.append("Дети: " + ", ".join(kids.slice(0, 40)))
+		lines.append(L.t("Children: ") + ", ".join(kids.slice(0, 40)))
 	return _ok("\n".join(lines))
 
 
@@ -717,17 +720,17 @@ func _t_node_set(args: Dictionary) -> Dictionary:
 		return _err(f.error)
 	var props = args.properties
 	if not props is Dictionary or props.is_empty():
-		return _err("properties должен быть объектом, например {\"position\": [100, 50]}")
+		return _err(L.t("properties must be an object, e.g. {\"position\": [100, 50]}"))
 	var node: Node = f.node
 	var ur := _ur()
-	ur.create_action("MCP: свойства " + str(node.name), UndoRedo.MERGE_DISABLE, _root())
+	ur.create_action(L.t("MCP: properties ") + str(node.name), UndoRedo.MERGE_DISABLE, _root())
 	var res := _set_props(node, props, ur)
 	ur.commit_action()
 	var msg := ""
 	if not res[0].is_empty():
 		msg = "%s: %s" % [_rel(node), _report_props(node, res[0])]
 	if not res[1].is_empty():
-		msg += ("\n" if msg != "" else "") + "Не применено: " + "; ".join(res[1])
+		msg += ("\n" if msg != "" else "") + L.t("Not applied: ") + "; ".join(res[1])
 	return _err(msg.trim_prefix("\n")) if res[0].is_empty() else _ok(msg)
 
 
@@ -738,12 +741,12 @@ func _t_node_delete(args: Dictionary) -> Dictionary:
 	var node: Node = f.node
 	var root := _root()
 	if node == root:
-		return _err("корень сцены удалить нельзя")
+		return _err(L.t("cannot delete the scene root"))
 	var parent := node.get_parent()
 	var owned := _owned(node, root)
 	var path := _rel(node)
 	var ur := _ur()
-	ur.create_action("MCP: удалить " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+	ur.create_action(L.t("MCP: delete ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 	ur.add_do_method(parent, "remove_child", node)
 	ur.add_undo_method(parent, "add_child", node, true)
 	ur.add_undo_method(parent, "move_child", node, node.get_index())
@@ -751,7 +754,7 @@ func _t_node_delete(args: Dictionary) -> Dictionary:
 	ur.add_undo_method(self, "_set_owners", owned, root)
 	ur.add_undo_reference(node)
 	ur.commit_action()
-	return _ok("Удалён %s%s" % [path, (" вместе с %d дочерними" % owned.size()) if owned.size() > 0 else ""])
+	return _ok(L.t("Deleted %s%s") % [path, (L.t(" with %d children") % owned.size()) if owned.size() > 0 else ""])
 
 
 func _t_node_move(args: Dictionary) -> Dictionary:
@@ -761,10 +764,10 @@ func _t_node_move(args: Dictionary) -> Dictionary:
 	var node: Node = f.node
 	var root := _root()
 	if node == root:
-		return _err("корень сцены нельзя перемещать или переименовывать")
+		return _err(L.t("the scene root cannot be moved or renamed"))
 	var has_change := args.has("new_name") or args.has("new_parent") or args.has("index")
 	if not has_change:
-		return _err("укажите хотя бы одно: new_name, new_parent или index")
+		return _err(L.t("give at least one of: new_name, new_parent or index"))
 	var old_parent := node.get_parent()
 	var old_index := node.get_index()
 	var new_parent: Node = old_parent
@@ -774,14 +777,14 @@ func _t_node_move(args: Dictionary) -> Dictionary:
 			return _err("new_parent: " + pf.error)
 		new_parent = pf.node
 		if new_parent == node or node.is_ancestor_of(new_parent):
-			return _err("нельзя переместить узел внутрь самого себя")
+			return _err(L.t("cannot move a node into itself"))
 	var ur := _ur()
-	ur.create_action("MCP: переместить " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+	ur.create_action(L.t("MCP: move ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 	if args.has("new_name") and str(args.new_name) != "":
 		var nn := str(args.new_name).validate_node_name()
 		if new_parent.has_node(NodePath(nn)) and new_parent.get_node(NodePath(nn)) != node:
 			ur.commit_action()
-			return _err("в \"%s\" уже есть узел %s" % [_rel(new_parent), nn])
+			return _err(L.t("\"%s\" already has a node named %s") % [_rel(new_parent), nn])
 		ur.add_do_property(node, "name", nn)
 		ur.add_undo_property(node, "name", node.name)
 	var owned := _owned(node, root)
@@ -798,7 +801,7 @@ func _t_node_move(args: Dictionary) -> Dictionary:
 		if new_parent == old_parent:
 			ur.add_undo_method(old_parent, "move_child", node, old_index)
 	ur.commit_action()
-	return _ok("Теперь %s (позиция %d в %s)" % [_rel(node), node.get_index(), _rel(node.get_parent())])
+	return _ok(L.t("Now %s (index %d in %s)") % [_rel(node), node.get_index(), _rel(node.get_parent())])
 
 
 func _t_signal_connect(args: Dictionary) -> Dictionary:
@@ -815,21 +818,21 @@ func _t_signal_connect(args: Dictionary) -> Dictionary:
 		var names: Array = []
 		for s in src.get_signal_list():
 			names.append(s.name)
-		return _err("у %s (%s) нет сигнала \"%s\". Есть: %s" % [_rel(src), src.get_class(), sig, ", ".join(names.slice(0, 30))])
+		return _err(L.t("%s (%s) has no signal \"%s\". Available: %s") % [_rel(src), src.get_class(), sig, ", ".join(names.slice(0, 30))])
 	var method := str(args.method).strip_edges().trim_suffix("()")
 	var callable := Callable(dst, method)
 	if src.is_connected(sig, callable):
-		return _ok("Уже подключено: %s.%s -> %s.%s" % [_label(src), sig, _label(dst), method])
+		return _ok(L.t("Already connected: %s.%s -> %s.%s") % [_label(src), sig, _label(dst), method])
 	var ur := _ur()
-	ur.create_action("MCP: сигнал " + sig, UndoRedo.MERGE_DISABLE, _root())
+	ur.create_action(L.t("MCP: signal ") + sig, UndoRedo.MERGE_DISABLE, _root())
 	ur.add_do_method(src, "connect", sig, callable, CONNECT_PERSIST)
 	ur.add_undo_method(src, "disconnect", sig, callable)
 	ur.commit_action()
-	var msg := "Подключено: %s.%s -> %s.%s" % [_label(src), sig, _label(dst), method]
+	var msg := L.t("Connected: %s.%s -> %s.%s") % [_label(src), sig, _label(dst), method]
 	if not dst.has_method(method):
 		var scr: Script = dst.get_script()
-		msg += "\nВнимание: у %s нет метода %s. Добавьте в %s: func %s(%s):" % [
-			_label(dst), method, scr.resource_path if scr else "его скрипт (скрипта нет)", method, _signal_args(src, sig)]
+		msg += L.t("\nWarning: %s has no method %s. Add to %s: func %s(%s):") % [
+			_label(dst), method, scr.resource_path if scr else L.t("its script (there is no script)"), method, _signal_args(src, sig)]
 	return _ok(msg)
 
 
@@ -843,24 +846,24 @@ func _signal_args(src: Node, sig: String) -> String:
 	return ""
 
 
-# ─────────────────────────── инструменты: скрипты ───────────────────────────
+# ─────────────────────────── tools: scripts ───────────────────────────
 
 func _t_script_read(args: Dictionary) -> Dictionary:
 	var r := _res_path(args.path)
 	if r.has("error"):
 		return _err(r.error)
 	if not FileAccess.file_exists(r.path):
-		return _err("файл не найден: " + r.path)
+		return _err(L.t("file not found: ") + r.path)
 	var text := FileAccess.get_file_as_string(r.path)
 	var lines := text.split("\n")
 	var total := lines.size()
 	var start: int = clampi(int(args.get("start_line", 1)), 1, max(total, 1))
 	var end: int = clampi(int(args.get("end_line", start + MAX_SCRIPT_READ - 1)), start, total)
-	var out: Array = ["%s (строк: %d)" % [r.path, total]]
+	var out: Array = [L.t("%s (lines: %d)") % [r.path, total]]
 	for i in range(start - 1, end):
 		out.append("%4d| %s" % [i + 1, lines[i]])
 	if end < total:
-		out.append("…дальше строки %d-%d, используйте start_line" % [end + 1, total])
+		out.append(L.t("…more at lines %d-%d, use start_line") % [end + 1, total])
 	return _ok("\n".join(out))
 
 
@@ -874,28 +877,28 @@ func _t_script_write(args: Dictionary) -> Dictionary:
 	var res := _save_script(path, content)
 	if res.has("error"):
 		return _err(res.error)
-	var msg := "%s %s (%d строк)" % ["Перезаписан" if existed else "Создан", path, content.split("\n").size()]
+	var msg := L.t("%s %s (%d lines)") % [L.t("Overwrote") if existed else L.t("Created"), path, content.split("\n").size()]
 	msg += "\n" + res.check
 	var attach := str(args.get("attach_to", ""))
 	if attach != "":
 		var f := _find(attach)
 		if f.has("error"):
-			msg += "\nНе прикреплён: " + f.error
+			msg += L.t("\nNot attached: ") + f.error
 		elif res.valid:
 			var node: Node = f.node
 			var scr: Script = load(path)
 			var base := scr.get_instance_base_type()
 			if base != "" and not node.is_class(base):
-				msg += "\nНе прикреплён: скрипт extends %s, а узел %s" % [base, node.get_class()]
+				msg += L.t("\nNot attached: the script extends %s, but the node is %s") % [base, node.get_class()]
 			else:
 				var ur := _ur()
-				ur.create_action("MCP: скрипт на " + str(node.name), UndoRedo.MERGE_DISABLE, _root())
+				ur.create_action(L.t("MCP: script on ") + str(node.name), UndoRedo.MERGE_DISABLE, _root())
 				ur.add_do_method(node, "set_script", scr)
 				ur.add_undo_method(node, "set_script", node.get_script())
 				ur.commit_action()
-				msg += "\nПрикреплён к " + _rel(node)
+				msg += L.t("\nAttached to ") + _rel(node)
 		else:
-			msg += "\nНе прикреплён, пока есть ошибки"
+			msg += L.t("\nNot attached while there are errors")
 	return {"text": msg, "error": not res.valid}
 
 
@@ -905,7 +908,7 @@ func _t_script_edit(args: Dictionary) -> Dictionary:
 		return _err(r.error)
 	var path: String = r.path
 	if not FileAccess.file_exists(path):
-		return _err("файл не найден: %s. Для нового файла используйте script_write" % path)
+		return _err(L.t("file not found: %s. For a new file use script_write") % path)
 	var text := FileAccess.get_file_as_string(path)
 	var lines := text.split("\n")
 	var new_text := _clean_code(str(args.get("new_text", "")))
@@ -915,7 +918,7 @@ func _t_script_edit(args: Dictionary) -> Dictionary:
 		var s: int = int(args.start_line)
 		var e: int = int(args.get("end_line", s))
 		if s < 1 or s > lines.size() + 1 or e < s - 1 or e > lines.size():
-			return _err("строки %d-%d вне файла (в нём %d строк)" % [s, e, lines.size()])
+			return _err(L.t("lines %d-%d are outside the file (it has %d lines)") % [s, e, lines.size()])
 		var before := lines.slice(0, s - 1)
 		var after := lines.slice(e)
 		var mid := PackedStringArray()
@@ -926,18 +929,18 @@ func _t_script_edit(args: Dictionary) -> Dictionary:
 		all.append_array(mid)
 		all.append_array(after)
 		result = "\n".join(all)
-		where = "строки %d-%d заменены на %d строк" % [s, e, mid.size()]
+		where = L.t("lines %d-%d replaced with %d lines") % [s, e, mid.size()]
 	elif args.has("old_text") and str(args.old_text) != "" and _count_exact(text, str(args.old_text).replace("\r\n", "\n")) > 0:
-		# Точное совпадение подстроки (в том числе кусок строки: items[3] -> items[2]).
+		# Exact substring match (including part of a line: items[3] -> items[2]).
 		var old := str(args.old_text).replace("\r\n", "\n")
 		var n := _count_exact(text, old)
 		if n > 1:
-			return _err("old_text встречается %d раз. Добавьте соседний текст, чтобы он был уникальным, или используйте start_line" % n)
+			return _err(L.t("old_text occurs %d times. Add surrounding text to make it unique, or use start_line") % n)
 		var at := text.find(old)
 		var first_line := text.substr(0, at).count("\n") + 1
 		var raw_new := str(args.get("new_text", "")).replace("\r\n", "\n")
 		result = text.substr(0, at) + raw_new + text.substr(at + old.length())
-		where = "замена в строке %d" % first_line if not old.contains("\n") else "замена со строки %d" % first_line
+		where = L.t("replaced at line %d") % first_line if not old.contains("\n") else L.t("replaced starting at line %d") % first_line
 	elif args.has("old_text") and str(args.old_text) != "":
 		var m := _match_span(lines, _clean_code(str(args.old_text)))
 		if m.has("error"):
@@ -951,9 +954,9 @@ func _t_script_edit(args: Dictionary) -> Dictionary:
 			all2.append_array(indent_new.split("\n"))
 		all2.append_array(after2)
 		result = "\n".join(all2)
-		where = "заменены строки %d-%d" % [m.start + 1, m.end + 1]
+		where = L.t("replaced lines %d-%d") % [m.start + 1, m.end + 1]
 	else:
-		return _err("укажите start_line (и end_line) или old_text")
+		return _err(L.t("give start_line (and end_line) or old_text"))
 	var res := _save_script(path, result)
 	if res.has("error"):
 		return _err(res.error)
@@ -966,8 +969,8 @@ static func _count_exact(text: String, needle: String) -> int:
 	return text.count(needle)
 
 
-## Ищет фрагмент построчно, сравнивая строки без учёта ведущих пробелов/табов.
-## Возвращает {start, end, indent_file, indent_given} (индексы строк с 0) или {error}.
+## Finds a fragment line by line, ignoring leading spaces/tabs.
+## Returns {start, end, indent_file, indent_given} (0-based line indexes) or {error}.
 func _match_span(lines: PackedStringArray, needle: String) -> Dictionary:
 	var want: Array = []
 	for l in needle.split("\n"):
@@ -977,7 +980,7 @@ func _match_span(lines: PackedStringArray, needle: String) -> Dictionary:
 	while not want.is_empty() and want[-1].strip_edges() == "":
 		want.pop_back()
 	if want.is_empty():
-		return {"error": "old_text пустой"}
+		return {"error": L.t("old_text is empty")}
 	var hits: Array = []
 	for i in range(0, lines.size() - want.size() + 1):
 		var ok := true
@@ -988,19 +991,19 @@ func _match_span(lines: PackedStringArray, needle: String) -> Dictionary:
 		if ok:
 			hits.append(i)
 	if hits.is_empty():
-		# Подсказка: где встречается первая строка фрагмента.
+		# Hint: where the first line of the fragment occurs.
 		var first := str(want[0]).strip_edges()
 		var near: Array = []
 		for i in lines.size():
 			if first.length() > 3 and lines[i].strip_edges().contains(first.substr(0, min(first.length(), 25))):
 				near.append(str(i + 1))
-		var tip := ("похожее начало в строках " + ", ".join(near.slice(0, 5))) if not near.is_empty() else "прочитайте файл через script_read"
-		return {"error": "old_text не найден (%s). Можно заменить по номерам строк через start_line/end_line" % tip}
+		var tip := (L.t("similar start at lines ") + ", ".join(near.slice(0, 5))) if not near.is_empty() else L.t("read the file with script_read")
+		return {"error": L.t("old_text not found (%s). You can replace by line numbers with start_line/end_line") % tip}
 	if hits.size() > 1:
 		var where: Array = []
 		for h in hits:
 			where.append(str(h + 1))
-		return {"error": "old_text встречается %d раз (строки %s). Добавьте соседние строки или используйте start_line" % [hits.size(), ", ".join(where.slice(0, 8))]}
+		return {"error": L.t("old_text occurs %d times (lines %s). Add neighbouring lines or use start_line") % [hits.size(), ", ".join(where.slice(0, 8))]}
 	var start: int = hits[0]
 	return {
 		"start": start,
@@ -1017,8 +1020,8 @@ static func _leading_ws(s: String) -> String:
 	return s.substr(0, i)
 
 
-## Переносит отступ: если модель прислала фрагмент с другим базовым отступом
-## (или пробелами вместо табов), выравниваем по файлу.
+## Re-indents: if the model sent a fragment with a different base indent
+## (or spaces instead of tabs), align it to the file.
 func _reindent(text: String, indent_file: String, indent_given: String) -> String:
 	if text == "":
 		return ""
@@ -1031,14 +1034,14 @@ func _reindent(text: String, indent_file: String, indent_given: String) -> Strin
 		var ws := _leading_ws(l)
 		var body := l.substr(ws.length())
 		var rel := ws.trim_prefix(indent_given) if ws.begins_with(indent_given) else ws
-		# пробелы -> табы, если файл на табах
+		# spaces -> tabs if the file uses tabs
 		if unit_file == "\t":
 			rel = rel.replace("    ", "\t")
 		out.append(indent_file + rel + body)
 	return "\n".join(out)
 
 
-## Снимает обёртку ```gdscript ... ```, которую модели часто добавляют.
+## Strips the ```gdscript ... ``` fence that models often add.
 static func _clean_code(s: String) -> String:
 	var t := s.replace("\r\n", "\n")
 	var stripped := t.strip_edges()
@@ -1049,19 +1052,19 @@ static func _clean_code(s: String) -> String:
 	return t
 
 
-## Пишет файл, проверяет GDScript, обновляет редактор.
-## Возвращает {valid: bool, check: String} или {error}.
+## Writes the file, checks GDScript, refreshes the editor.
+## Returns {valid: bool, check: String} or {error}.
 func _save_script(path: String, content: String) -> Dictionary:
 	if not path.get_extension() in ["gd", "gdshader", "cs", "txt", "md", "json", "cfg", "tres", "gdshaderinc"]:
-		return {"error": "можно писать только текстовые файлы (.gd, .gdshader, .cs, .json, .txt ...)"}
-	var check := {"valid": true, "check": "Проверка: не GDScript, синтаксис не проверялся"}
+		return {"error": L.t("only text files can be written (.gd, .gdshader, .cs, .json, .txt ...)")}
+	var check := {"valid": true, "check": L.t("Check: not GDScript, syntax not checked")}
 	if path.get_extension() == "gd":
 		check = _check_gdscript(content)
 	_ensure_dir(path)
 	var old_text := FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
-		return {"error": "не удалось записать %s (код %d)" % [path, FileAccess.get_open_error()]}
+		return {"error": L.t("could not write %s (code %d)") % [path, FileAccess.get_open_error()]}
 	f.store_string(content)
 	f.close()
 	_fs_update(path)
@@ -1074,10 +1077,10 @@ func _save_script(path: String, content: String) -> Dictionary:
 	return check
 
 
-## Если файл открыт во встроенном редакторе скриптов (например, его открыл отладчик после ошибки),
-## в буфере остаётся старый текст, и при следующем запуске игры редактор сохранит его поверх нашей правки.
-## Обновляем такие буферы. Буфер с несохранёнными правками пользователя не трогаем: его текст
-## отличается от старого содержимого файла.
+## If the file is open in the built-in script editor (e.g. the debugger opened it after an error),
+## the buffer keeps the old text, and the next game run would save it over our edit.
+## So refresh those buffers. A buffer with the user's unsaved edits is left alone: its text
+## differs from the old file content.
 func _sync_open_editors(old_text: String, new_text: String) -> void:
 	if old_text == "" or old_text == new_text:
 		return
@@ -1100,21 +1103,21 @@ func _sync_open_editors(old_text: String, new_text: String) -> void:
 
 func _check_gdscript(content: String) -> Dictionary:
 	var scr := GDScript.new()
-	# class_name в безымянном скрипте конфликтует с уже зарегистрированным классом,
-	# поэтому для проверки комментируем его (номера строк сохраняются).
+	# class_name in an anonymous script clashes with the already registered class,
+	# so comment it out for the check (line numbers stay the same).
 	var rx := RegEx.create_from_string("(?m)^class_name\\b")
 	scr.source_code = rx.sub(content, "#class_name", true)
 	var mark: int = _logger.mark() if _logger else 0
 	var err := scr.reload()
 	if err == OK:
-		return {"valid": true, "check": "Проверка: ошибок нет"}
+		return {"valid": true, "check": L.t("Check: no errors")}
 	var details: Array = []
 	if _logger:
 		for l in _logger.since(mark):
 			details.append("  " + _clean_err(l))
 	if details.is_empty():
-		details.append("  подробности в панели Output редактора (на Godot 4.5+ они приходят сюда)")
-	return {"valid": false, "check": "Проверка: ОШИБКИ\n" + "\n".join(details.slice(0, 10))}
+		details.append(L.t("  details are in the editor Output panel (on Godot 4.5+ they come here)"))
+	return {"valid": false, "check": L.t("Check: ERRORS\n") + "\n".join(details.slice(0, 10))}
 
 
 static func _clean_err(l: String) -> String:
@@ -1122,11 +1125,11 @@ static func _clean_err(l: String) -> String:
 	var m := rx.search(l)
 	var out := l.replace("SCRIPT ERROR: ", "")
 	if m:
-		out = "строка %s: %s" % [m.get_string(1), rx.sub(out, "")]
+		out = L.t("line %s: %s") % [m.get_string(1), rx.sub(out, "")]
 	return out
 
 
-# ─────────────────────────── инструменты: игра ───────────────────────────
+# ─────────────────────────── tools: game ───────────────────────────
 
 func _t_game_run(args: Dictionary) -> Dictionary:
 	var scene := str(args.get("scene", "main")).strip_edges()
@@ -1139,9 +1142,9 @@ func _t_game_run(args: Dictionary) -> Dictionary:
 		"", "main":
 			var main := str(ProjectSettings.get_setting("application/run/main_scene", ""))
 			if main == "":
-				return _err("главная сцена проекта не задана. Запустите scene=\"current\" или укажите путь res://...tscn")
+				return _err(L.t("the project has no main scene. Run scene=\"current\" or give a path res://...tscn"))
 			EditorInterface.play_main_scene()
-			return _ok("Запущена главная сцена %s. Через пару секунд вызовите game_output" % main)
+			return _ok(L.t("Started the main scene %s. Call game_output in a couple of seconds") % main)
 		"current":
 			var root := _root()
 			if root == null:
@@ -1149,68 +1152,68 @@ func _t_game_run(args: Dictionary) -> Dictionary:
 			if root.scene_file_path != "":
 				EditorInterface.save_scene()
 			EditorInterface.play_current_scene()
-			return _ok("Запущена текущая сцена %s. Через пару секунд вызовите game_output" % root.scene_file_path)
+			return _ok(L.t("Started the current scene %s. Call game_output in a couple of seconds") % root.scene_file_path)
 		_:
 			var r := _res_path(scene)
 			if r.has("error"):
 				return _err(r.error)
 			if not ResourceLoader.exists(r.path):
-				return _err("сцена не найдена: " + r.path)
+				return _err(L.t("scene not found: ") + r.path)
 			EditorInterface.play_custom_scene(r.path)
-			return _ok("Запущена %s. Через пару секунд вызовите game_output" % r.path)
+			return _ok(L.t("Started %s. Call game_output in a couple of seconds") % r.path)
 
 
 func _t_game_stop(_args: Dictionary) -> Dictionary:
 	if not EditorInterface.is_playing_scene():
-		return _ok("Игра не запущена")
+		return _ok(L.t("The game is not running"))
 	EditorInterface.stop_playing_scene()
-	return _ok("Игра остановлена")
+	return _ok(L.t("Game stopped"))
 
 
 func _t_game_output(args: Dictionary) -> Dictionary:
 	var errors_only := bool(args.get("errors_only", false))
 	var max_lines: int = clampi(int(args.get("lines", 60)), 5, MAX_OUTPUT_LINES)
 	var out: Array = []
-	out.append("Игра: " + ("запущена" if EditorInterface.is_playing_scene() else "не запущена"))
+	out.append(L.t("Game: ") + (L.t("running") if EditorInterface.is_playing_scene() else L.t("not running")))
 	var log_path := OS.get_user_data_dir().path_join("logs/godot.log")
 	var game_lines: Array = []
 	var hidden := 0
 	if _last_run_ms == 0:
-		game_lines.append("(игра в этой сессии не запускалась, вызовите game_run)")
+		game_lines.append(L.t("(the game was not started in this session, call game_run)"))
 	else:
-		# Пока игра идёт, читаем живые источники редактора: панель Output (print) и вкладку
-		# Errors отладчика. На Windows файл лога игры до её остановки может быть недоступен.
+		# While the game runs, read live editor sources: the Output panel (print) and the debugger
+		# Errors tab. On Windows the game log file may be locked until the game stops.
 		var raw := PackedStringArray()
 		if EditorInterface.is_playing_scene():
 			raw = _live_game_output()
 		if raw.is_empty() and FileAccess.file_exists(log_path):
 			raw = FileAccess.get_file_as_string(log_path).split("\n")
 		if raw.is_empty() and not EditorInterface.is_playing_scene() and not FileAccess.file_exists(log_path):
-			game_lines.append("(лог не найден: включите debug/file_logging/enable_file_logging в настройках проекта)")
+			game_lines.append(L.t("(log not found: enable debug/file_logging/enable_file_logging in Project Settings)"))
 		else:
 			var parsed := _filter_log(raw, errors_only)
 			game_lines = parsed.lines
 			hidden = parsed.hidden
 	if game_lines.size() > max_lines:
-		game_lines = ["…пропущено %d строк" % (game_lines.size() - max_lines)] + game_lines.slice(game_lines.size() - max_lines)
-	out.append("Вывод игры:" if not game_lines.is_empty() else ("Вывод игры: ошибок нет" if errors_only else "Вывод игры: пусто"))
+		game_lines = [L.t("…%d lines skipped") % (game_lines.size() - max_lines)] + game_lines.slice(game_lines.size() - max_lines)
+	out.append(L.t("Game output:") if not game_lines.is_empty() else (L.t("Game output: no errors") if errors_only else L.t("Game output: empty")))
 	out.append_array(game_lines)
 	if hidden > 0:
-		out.append("(скрыто %d служебных сообщений движка: драйверы, звук, дисплей)" % hidden)
+		out.append(L.t("(%d engine service messages hidden: drivers, audio, display)") % hidden)
 	if EditorInterface.is_playing_scene():
 		var frame := _debugger_break_frame()
 		if frame != "":
-			out.append("Игра стоит на паузе: отладчик остановил её на ошибке (%s). Ждать бесполезно: исправьте код и вызовите game_run заново (или game_stop)." % frame)
+			out.append(L.t("The game is paused: the debugger stopped it on an error (%s). Waiting will not help: fix the code and call game_run again (or game_stop).") % frame)
 	if _logger:
 		var ed := _filter_log(PackedStringArray(_logger.since(0)), true)
 		if not ed.lines.is_empty():
-			out.append("Ошибки редактора:")
+			out.append(L.t("Editor errors:"))
 			out.append_array(ed.lines.slice(max(0, ed.lines.size() - 20)))
 	return _ok("\n".join(out))
 
 
-## Вывод текущего запуска из редактора, в формате файла лога:
-## print-строки из панели Output и ошибки с вкладки Errors отладчика.
+## Output of the current run from the editor, in log file format:
+## print lines from the Output panel and errors from the debugger Errors tab.
 func _live_game_output() -> PackedStringArray:
 	var out := PackedStringArray()
 	var panel := _editor_output_text().split("\n")
@@ -1220,7 +1223,7 @@ func _live_game_output() -> PackedStringArray:
 			start = i + 1
 	for i in range(start, panel.size()):
 		var l: String = panel[i]
-		# Строки с отступом и ERROR/WARNING в панели пишет сам редактор, а не игра.
+		# Indented lines and ERROR/WARNING lines in the panel come from the editor, not the game.
 		if l.begins_with("  ERROR:") or l.begins_with("  WARNING:") or l.begins_with("OpenGL API") or l.begins_with("Vulkan "):
 			continue
 		out.append(l)
@@ -1228,7 +1231,7 @@ func _live_game_output() -> PackedStringArray:
 	return out
 
 
-## Ошибки текущей сессии с вкладки Errors отладчика.
+## Errors of the current session from the debugger Errors tab.
 func _debugger_errors() -> PackedStringArray:
 	var out := PackedStringArray()
 	var base := EditorInterface.get_base_control()
@@ -1250,15 +1253,15 @@ func _debugger_errors() -> PackedStringArray:
 				var marker := msg.find("(): ")
 				var colon := msg.find(": ")
 				if marker > 0 and msg.substr(0, marker).contains(" @ "):
-					msg = msg.substr(marker + 4)  # "m2.gd:7 @ _ready(): текст" -> "текст"
+					msg = msg.substr(marker + 4)  # "m2.gd:7 @ _ready(): text" -> "text"
 				elif colon > 0 and not msg.substr(0, colon).contains(" "):
-					msg = msg.substr(colon + 2)  # "_ready: текст" -> "текст"
+					msg = msg.substr(colon + 2)  # "_ready: text" -> "text"
 				var warning := warn_icon != null and it.get_icon(0) == warn_icon
 				var where := ""
 				var is_script := false
 				var meta = it.get_metadata(0)
 				if meta is Array and meta.size() >= 2 and str(meta[0]).begins_with("res://"):
-					# В метаданных полный путь к скрипту и строка.
+					# The metadata holds the full script path and line.
 					is_script = true
 					where = "%s:%d" % [meta[0], int(meta[1])]
 				else:
@@ -1275,7 +1278,7 @@ func _debugger_errors() -> PackedStringArray:
 	return out
 
 
-## Если отладчик остановил игру на ошибке, возвращает верхний кадр стека ("res://main.gd:6 @ _ready").
+## If the debugger stopped the game on an error, returns the top stack frame ("res://main.gd:6 @ _ready").
 func _debugger_break_frame() -> String:
 	var base := EditorInterface.get_base_control()
 	if base == null:
@@ -1292,8 +1295,8 @@ func _debugger_break_frame() -> String:
 	return ""
 
 
-## Дерево вкладки ошибок отладчика. Имя вкладки переведено на язык редактора («Errors», «Ошибки»),
-## поэтому узнаём его по содержимому: 2 колонки, в первой время вида 0:00:01:234.
+## Tree of the debugger errors tab. The tab name is localized to the editor language,
+## so detect it by content: 2 columns, the first holds a time like 0:00:01:234.
 static func _is_error_tree(tr: Tree) -> bool:
 	if tr.columns != 2 or tr.get_root() == null:
 		return false
@@ -1303,8 +1306,8 @@ static func _is_error_tree(tr: Tree) -> bool:
 	return RegEx.create_from_string("^\\d+:\\d\\d:\\d\\d:\\d\\d\\d$").search(first.get_text(0)) != null
 
 
-## Текст панели Output редактора (туда отладчик пишет вывод запущенной игры).
-## Нужен, когда файл лога игры недоступен для чтения (Windows держит его, пока игра работает).
+## Text of the editor Output panel (the debugger writes the running game's output there).
+## Needed when the game log file cannot be read (Windows locks it while the game runs).
 func _editor_output_text() -> String:
 	var base := EditorInterface.get_base_control()
 	if base == null:
@@ -1318,8 +1321,8 @@ func _editor_output_text() -> String:
 	return (rtls[0] as RichTextLabel).get_parsed_text()
 
 
-## Делит лог на записи (строка + её отступленные продолжения) и убирает шум движка.
-## Ошибку оставляем, если это ошибка скрипта/пользователя или она ссылается на res://.
+## Splits the log into entries (a line plus its indented continuation) and drops engine noise.
+## An error is kept if it is a script/user error or mentions res://.
 func _filter_log(raw: PackedStringArray, errors_only: bool) -> Dictionary:
 	var entries: Array = []
 	for l in raw:
@@ -1346,21 +1349,21 @@ func _filter_log(raw: PackedStringArray, errors_only: bool) -> Dictionary:
 		if not mine:
 			hidden += 1
 			continue
-		# Backtrace GDScript дублирует строку "at:", оставляем сообщение и место.
+		# The GDScript backtrace repeats the "at:" line; keep the message and location.
 		lines.append_array(e.slice(0, 2))
 	return {"lines": lines, "hidden": hidden}
 
 
-# ─────────────────────────── инструменты: справка ───────────────────────────
+# ─────────────────────────── tools: reference ───────────────────────────
 
 func _t_class_info(args: Dictionary) -> Dictionary:
 	var cls := str(args.type).strip_edges()
 	if not ClassDB.class_exists(cls):
 		var gp := _global_class_path(cls)
 		if gp != "":
-			return _err("%s это class_name из %s. Прочитайте скрипт через script_read" % [cls, gp])
+			return _err(L.t("%s is a class_name from %s. Read the script with script_read") % [cls, gp])
 		var sim := _similar(Array(ClassDB.get_class_list()), cls, 8)
-		return _err("нет класса \"%s\"%s" % [cls, (". Похожие: " + ", ".join(sim)) if not sim.is_empty() else ""])
+		return _err(L.t("no class \"%s\"%s") % [cls, (L.t(". Similar: ") + ", ".join(sim)) if not sim.is_empty() else ""])
 	var filter := str(args.get("filter", "")).strip_edges()
 	var chain: Array = [cls]
 	var p := ClassDB.get_parent_class(cls)
@@ -1368,7 +1371,7 @@ func _t_class_info(args: Dictionary) -> Dictionary:
 		chain.append(p)
 		p = ClassDB.get_parent_class(p)
 	var lines: Array = ["%s: %s" % [cls, " < ".join(chain.slice(1))]]
-	# Без фильтра показываем только собственные члены класса, с фильтром ищем по всей цепочке.
+	# Without a filter show only the class's own members; with a filter search the whole chain.
 	var classes: Array = [cls] if filter == "" else chain
 	var props: Array = []
 	var methods: Array = []
@@ -1389,7 +1392,7 @@ func _t_class_info(args: Dictionary) -> Dictionary:
 			if mn.begins_with("_") and not (m.flags & METHOD_FLAG_VIRTUAL):
 				continue
 			if accessors.has(StringName(mn)) and filter == "":
-				continue  # сеттеры/геттеры: свойства уже показаны выше
+				continue  # setters/getters: the properties are already listed above
 			if filter != "" and not mn.containsn(filter):
 				continue
 			var a: Array = []
@@ -1403,18 +1406,18 @@ func _t_class_info(args: Dictionary) -> Dictionary:
 					sa.append(arg.name)
 				signals.append("  %s(%s)" % [s.name, ", ".join(sa)])
 	if not props.is_empty():
-		lines.append("Свойства:")
+		lines.append(L.t("Properties:"))
 		lines.append_array(props.slice(0, 50))
 	if not signals.is_empty():
-		lines.append("Сигналы:")
+		lines.append(L.t("Signals:"))
 		lines.append_array(signals.slice(0, 30))
 	if not methods.is_empty():
-		lines.append("Методы:")
+		lines.append(L.t("Methods:"))
 		lines.append_array(methods.slice(0, 50))
 	if props.size() + methods.size() + signals.size() == 0:
-		lines.append("Ничего не найдено" + (" по фильтру \"%s\"" % filter if filter != "" else ""))
+		lines.append(L.t("Nothing found") + (L.t(" matching \"%s\"") % filter if filter != "" else ""))
 	elif filter == "":
-		lines.append("(только члены %s; унаследованные ищите через filter)" % cls)
+		lines.append(L.t("(only members of %s; find inherited ones with filter)") % cls)
 	return _ok("\n".join(lines))
 
 

@@ -1,7 +1,9 @@
 @tool
 extends EditorPlugin
-## Точка входа плагина: поднимает HTTP-сервер MCP и пишет конфиг для клиентов.
 
+## Plugin entry point: starts the MCP HTTP server and writes the client config.
+
+const L := preload("res://addons/local_mcp/lang.gd")
 const HttpServer := preload("res://addons/local_mcp/http_server.gd")
 const Mcp := preload("res://addons/local_mcp/mcp.gd")
 const Tools := preload("res://addons/local_mcp/tools.gd")
@@ -19,6 +21,7 @@ var _tools: Tools
 
 func _enter_tree() -> void:
 	_ensure_settings()
+	L.refresh()
 	var port: int = ProjectSettings.get_setting(SETTING_PORT, DEFAULT_PORT)
 	var token := ""
 	if ProjectSettings.get_setting(SETTING_AUTH, true):
@@ -33,10 +36,10 @@ func _enter_tree() -> void:
 	_server.handler = _mcp.handle_http
 	var bound := _server.start(port)
 	if bound < 0:
-		push_error("[LocalMCP] не удалось занять порты %d-%d" % [port, port + 9])
+		push_error(L.t("[LocalMCP] could not bind ports %d-%d") % [port, port + 9])
 		return
 	_write_client_config(bound, token)
-	print("[LocalMCP] слушаю http://127.0.0.1:%d/mcp" % bound)
+	print(L.t("[LocalMCP] listening on http://127.0.0.1:%d/mcp") % bound)
 
 
 func _exit_tree() -> void:
@@ -61,6 +64,11 @@ func _ensure_settings() -> void:
 	if not ProjectSettings.has_setting(SETTING_AUTH):
 		ProjectSettings.set_setting(SETTING_AUTH, true)
 	ProjectSettings.set_initial_value(SETTING_AUTH, true)
+	if not ProjectSettings.has_setting(L.SETTING):
+		ProjectSettings.set_setting(L.SETTING, "auto")
+	ProjectSettings.set_initial_value(L.SETTING, "auto")
+	ProjectSettings.add_property_info({"name": L.SETTING, "type": TYPE_STRING,
+		"hint": PROPERTY_HINT_ENUM_SUGGESTION, "hint_string": "auto," + ",".join(L.available())})
 	for g in Tools.GROUPS:
 		var key: String = "local_mcp/groups/" + g
 		if not ProjectSettings.has_setting(key):
@@ -79,7 +87,7 @@ func _write_token(token: String) -> void:
 		f.store_string(token)
 
 
-## Пишет local_mcp.json с готовыми блоками для HTTP-клиентов и для моста stdio.
+## Writes local_mcp.json with ready-made blocks for HTTP clients and for the stdio bridge.
 func _write_client_config(port: int, token: String) -> void:
 	var url := "http://127.0.0.1:%d/mcp" % port
 	var http_entry := {"url": url}
@@ -87,7 +95,7 @@ func _write_client_config(port: int, token: String) -> void:
 		http_entry["headers"] = {"Authorization": "Bearer " + token}
 	var bridge_path := ProjectSettings.globalize_path("res://addons/local_mcp/bridge/stdio_bridge.py")
 	var cfg := {
-		"_comment": "Скопируйте нужный блок в конфиг вашего MCP-клиента. Файл перезаписывается при каждом запуске редактора.",
+		"_comment": L.t("Copy the block you need into your MCP client config. This file is rewritten every time the editor starts."),
 		"mcpServers": {
 			"godot": http_entry,
 		},

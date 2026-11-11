@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Стенд: гоняет типовые задачи Godot через любую OpenAI-совместимую модель и считает, где она ошибается.
+"""Bench: runs typical Godot tasks through any OpenAI-compatible model and counts where it goes wrong.
 
-Нужно: редактор Godot с включённым плагином Local MCP и открытым проектом, в корне которого лежит icon.svg
-(есть в любом новом проекте). Только стандартная библиотека Python 3.10+.
+Needs: the Godot editor with the Local MCP plugin enabled and a project open that has icon.svg in its root
+(every new project does). Standard library only, Python 3.10+.
 
-Примеры:
-  # LM Studio / llama.cpp / vLLM (в т.ч. через Tailscale)
+Examples:
+  # LM Studio / llama.cpp / vLLM (also over Tailscale)
   python bench/run_bench.py --project C:/Games/MyProj --base-url http://100.64.0.5:1234/v1 --model qwen3-next
   # Ollama
   python bench/run_bench.py --project . --base-url http://localhost:11434/v1 --model qwen3-next
-  # DeepSeek API (ключ в переменной DEEPSEEK_API_KEY)
+  # DeepSeek API (key in the DEEPSEEK_API_KEY variable)
   python bench/run_bench.py --project . --base-url https://api.deepseek.com/v1 --model deepseek-chat --api-key-env DEEPSEEK_API_KEY
-  # Проверить сам стенд без модели: эталонные решения
+  # Check the bench itself without a model: reference solutions
   python bench/run_bench.py --project . --golden
 
-Отчёт: таблица в консоли и bench/results/<модель>-<время>.json с полной перепиской по каждой задаче.
+  # Task prompts in Russian, plugin replies to the model in Russian
+  python bench/run_bench.py --project . --model qwen3-next --lang ru --reply-lang ru
+
+Report: a table in the console and bench/results/<model>-<time>.json with the full transcript of every task.
 """
 import argparse
 import json
@@ -38,7 +41,7 @@ SYSTEM_PROMPT = (
 )
 
 
-# ───────────────────────────── модель ─────────────────────────────
+# ───────────────────────────── model ─────────────────────────────
 
 class Model:
     def __init__(self, base_url: str, model: str, api_key: str, temperature: float, timeout: float):
@@ -74,8 +77,8 @@ TEXT_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
 
 def extract_calls(msg: dict, stats: dict) -> list:
-    """Достаёт вызовы инструментов. Если сервер модели не распарсил их и они пришли текстом
-    (<tool_call>{...}</tool_call>, частая беда Qwen), тоже подбираем, но считаем как ошибку формата."""
+    """Extracts tool calls. If the model server did not parse them and they came as text
+    (<tool_call>{...}</tool_call>, a common Qwen issue), pick them up too but count a format error."""
     calls = []
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function", {})
@@ -100,7 +103,7 @@ def extract_calls(msg: dict, stats: dict) -> list:
     return calls
 
 
-# ───────────────────────────── прогон задачи ─────────────────────────────
+# ───────────────────────────── running a task ─────────────────────────────
 
 def fill(value, ctx):
     if isinstance(value, str):
@@ -112,7 +115,8 @@ def fill(value, ctx):
     return value
 
 
-def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: list, max_steps: int) -> dict:
+def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: list, max_steps: int,
+             lang: str = "en", reply_lang: str = "") -> dict:
     stats = {"steps": 0, "tool_calls": 0, "tool_errors": 0, "bad_json": 0, "text_calls": 0,
              "unknown_tool": 0, "prompt_tokens": 0, "completion_tokens": 0}
     transcript = []
@@ -120,7 +124,7 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
     t0 = time.time()
     task["setup"](g, ctx)
 
-    if model is None:  # эталон
+    if model is None:  # reference solution
         for name, args in task["golden"]:
             if name == "__sleep":
                 time.sleep(args)
@@ -129,10 +133,10 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
             stats["tool_calls"] += 1
             stats["tool_errors"] += int(err)
             transcript.append({"tool": name, "args": fill(args, ctx), "result": text, "error": err})
-        answer = fill(task.get("golden_answer", "готово"), ctx)
+        answer = fill(task.get("golden_answer", "done"), ctx)
     else:
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": fill(task["prompt"], ctx)}]
+                    {"role": "user", "content": fill(task["prompt"].get(lang) or task["prompt"]["en"], ctx)}]
         names = {t["function"]["name"] for t in tools}
         for _ in range(max_steps):
             stats["steps"] += 1
@@ -143,7 +147,7 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
             msg = resp["choices"][0]["message"]
             calls = extract_calls(msg, stats)
             content = msg.get("content") or ""
-            # Рассуждения в <think> не возвращаем в историю: они съедают контекст.
+            # Do not keep <think> reasoning in the history: it eats context.
             clean = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
             if not calls:
                 answer = clean
@@ -157,18 +161,18 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
             for c in calls:
                 stats["tool_calls"] += 1
                 if c["args"] is None:
-                    text, err = "Ошибка: аргументы не являются корректным JSON-объектом", True
+                    text, err = "Error: the arguments are not a valid JSON object", True
                 elif c["name"] not in names:
                     stats["unknown_tool"] += 1
-                    text, err = g.call(c["name"], **c["args"])  # плагин сам перечислит доступные
+                    text, err = g.call_lang(c["name"], c["args"], reply_lang)  # the plugin lists the available ones
                 else:
-                    text, err = g.call(c["name"], **c["args"])
+                    text, err = g.call_lang(c["name"], c["args"], reply_lang)
                 stats["tool_errors"] += int(err)
                 transcript.append({"tool": c["name"], "args": c["args"], "result": text, "error": err,
                                    "from_text": c.get("from_text", False)})
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": text})
         else:
-            transcript.append({"note": f"достигнут предел шагов {max_steps}"})
+            transcript.append({"note": f"step limit {max_steps} reached"})
 
     g.call("game_stop")
     fails = task["check"](g, ctx, answer)
@@ -180,24 +184,26 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", required=True, help="папка проекта Godot, открытого в редакторе")
-    ap.add_argument("--base-url", default="http://localhost:1234/v1", help="OpenAI-совместимый адрес модели")
-    ap.add_argument("--model", default="", help="имя модели (по умолчанию первая из /models)")
+    ap.add_argument("--project", required=True, help="folder of the Godot project open in the editor")
+    ap.add_argument("--base-url", default="http://localhost:1234/v1", help="OpenAI-compatible model endpoint")
+    ap.add_argument("--model", default="", help="model name (default: the first one from /models)")
     ap.add_argument("--api-key", default="")
-    ap.add_argument("--api-key-env", default="", help="имя переменной окружения с ключом")
-    ap.add_argument("--tasks", default="", help="через запятую, например player,fix")
-    ap.add_argument("--repeat", type=int, default=1, help="сколько раз гонять каждую задачу")
+    ap.add_argument("--api-key-env", default="", help="name of the env variable holding the key")
+    ap.add_argument("--tasks", default="", help="comma-separated, e.g. player,fix")
+    ap.add_argument("--repeat", type=int, default=1, help="how many times to run each task")
     ap.add_argument("--max-steps", type=int, default=25)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--timeout", type=float, default=600)
-    ap.add_argument("--golden", action="store_true", help="прогнать эталонные решения вместо модели")
+    ap.add_argument("--golden", action="store_true", help="run the reference solutions instead of a model")
+    ap.add_argument("--lang", default="en", help="task prompt language: en or ru")
+    ap.add_argument("--reply-lang", default="", help="plugin reply language for the model (en, ru, zh...); default: plugin setting")
     args = ap.parse_args()
 
     g = GodotMcp(project=args.project)
     try:
         g.initialize()
     except Exception as e:  # noqa: BLE001
-        sys.exit(f"Godot не отвечает ({e}). Откройте проект в редакторе и включите плагин Local MCP.")
+        sys.exit(f"Godot is not answering ({e}). Open the project in the editor and enable the Local MCP plugin.")
     mcp_tools = g.tools()
     tools = mcp_to_openai(mcp_tools)
     schema_tokens = len(json.dumps(tools)) // 4
@@ -216,7 +222,7 @@ def main() -> None:
                 with m._opener.open(req, timeout=30) as resp:
                     model_name = json.loads(resp.read())["data"][0]["id"]
             except Exception as e:  # noqa: BLE001
-                sys.exit(f"Не удалось получить список моделей с {args.base_url} ({e}). Укажите --model.")
+                sys.exit(f"Could not get the model list from {args.base_url} ({e}). Pass --model.")
         model = Model(args.base_url, model_name, key, args.temperature, args.timeout)
 
     selected = [t for t in TASKS if not args.tasks or t["id"] in args.tasks.split(",")]
@@ -224,11 +230,12 @@ def main() -> None:
     skipped = [t["id"] for t in selected if t.get("group") and not any(n.startswith(
         {"tilemap": "tilemap_", "animation": "anim_"}.get(t["group"], t["group"])) for n in tool_names)]
     if skipped:
-        print(f"Пропускаю {', '.join(skipped)}: их группы выключены (local_mcp/groups/... в настройках проекта "
-              "или LOCAL_MCP_GROUPS=all у редактора)")
+        print(f"Skipping {', '.join(skipped)}: their groups are disabled (local_mcp/groups/... in Project Settings "
+              "or LOCAL_MCP_GROUPS=all for the editor)")
         selected = [t for t in selected if t["id"] not in skipped]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    print(f"Модель: {model_name} | инструментов: {len(tools)}, схемы ~{schema_tokens} токенов | задач: {len(selected)} x {args.repeat}\n")
+    print(f"Model: {model_name} | tools: {len(tools)}, schemas ~{schema_tokens} tokens | tasks: {len(selected)} x {args.repeat}"
+          f" | prompts: {args.lang}, replies: {args.reply_lang or 'plugin setting'}\n")
 
     results = []
     for rep in range(args.repeat):
@@ -236,23 +243,23 @@ def main() -> None:
             ctx = {"dir": f"res://bench_runs/{stamp}/{task['id']}_{rep}", "secret": random.randint(10000, 99999)}
             ctx["scene"] = ctx["dir"] + "/scene.tscn"
             try:
-                r = run_task(g, task, ctx, model, tools, args.max_steps)
+                r = run_task(g, task, ctx, model, tools, args.max_steps, args.lang, args.reply_lang)
             except Exception as e:  # noqa: BLE001
-                r = {"id": task["id"], "ok": False, "fails": [f"сбой стенда: {e}"], "answer": "", "stats": {}, "transcript": []}
+                r = {"id": task["id"], "ok": False, "fails": [f"bench failure: {e}"], "answer": "", "stats": {}, "transcript": []}
             results.append(r)
             s = r["stats"]
             mark = "OK  " if r["ok"] else "FAIL"
-            print(f"{mark} {task['id']:<8} вызовов {s.get('tool_calls', 0):>2}, ошибок {s.get('tool_errors', 0):>2}, "
-                  f"JSON {s.get('bad_json', 0)}, текстом {s.get('text_calls', 0)}, {s.get('seconds', 0)} c"
+            print(f"{mark} {task['id']:<8} calls {s.get('tool_calls', 0):>2}, errors {s.get('tool_errors', 0):>2}, "
+                  f"JSON {s.get('bad_json', 0)}, as text {s.get('text_calls', 0)}, {s.get('seconds', 0)} s"
                   + ("" if r["ok"] else "  ← " + "; ".join(r["fails"])))
 
     ok = sum(r["ok"] for r in results)
     tot = {k: sum(r["stats"].get(k, 0) for r in results) for k in
            ["tool_calls", "tool_errors", "bad_json", "text_calls", "unknown_tool", "prompt_tokens", "completion_tokens"]}
-    print(f"\nИтого: {ok}/{len(results)} задач решено. Вызовов {tot['tool_calls']}, из них с ошибкой {tot['tool_errors']}"
-          f" ({(100 * tot['tool_errors'] // max(tot['tool_calls'], 1))}%), битый JSON {tot['bad_json']}, "
-          f"вызовы текстом {tot['text_calls']}, неизвестный инструмент {tot['unknown_tool']}. "
-          f"Токены: {tot['prompt_tokens']} вход / {tot['completion_tokens']} выход.")
+    print(f"\nTotal: {ok}/{len(results)} tasks solved. Calls {tot['tool_calls']}, with errors {tot['tool_errors']}"
+          f" ({(100 * tot['tool_errors'] // max(tot['tool_calls'], 1))}%), broken JSON {tot['bad_json']}, "
+          f"calls as text {tot['text_calls']}, unknown tool {tot['unknown_tool']}. "
+          f"Tokens: {tot['prompt_tokens']} in / {tot['completion_tokens']} out.")
 
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
     os.makedirs(out_dir, exist_ok=True)
@@ -260,8 +267,8 @@ def main() -> None:
     path = os.path.join(out_dir, f"{safe}-{stamp}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"model": model_name, "base_url": None if args.golden else args.base_url, "schema_tokens": schema_tokens,
-                   "solved": ok, "total": len(results), "totals": tot, "results": results}, f, ensure_ascii=False, indent=1)
-    print(f"Подробный отчёт: {path}")
+                   "lang": args.lang, "reply_lang": args.reply_lang, "solved": ok, "total": len(results), "totals": tot, "results": results}, f, ensure_ascii=False, indent=1)
+    print(f"Full report: {path}")
 
 
 if __name__ == "__main__":

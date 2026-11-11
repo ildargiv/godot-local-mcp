@@ -1,7 +1,9 @@
 @tool
 extends RefCounted
-## Группа «tilemap»: тайлсет из картинки, рисование клеток, чтение карты текстом.
-## Работает с TileMapLayer (Godot 4.3+) и со старым TileMap (слой 0).
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## Group "tilemap": tileset from an image, painting cells, reading the map as text.
+## Works with TileMapLayer (Godot 4.3+) and the old TileMap (layer 0).
 
 const Values := preload("res://addons/local_mcp/values.gd")
 const MAX_READ_W := 64
@@ -31,7 +33,7 @@ func defs() -> Array:
 	]
 
 
-# ─────────────────────────── доступ к ячейкам (TileMapLayer / TileMap) ───────────────────────────
+# ─────────────────────────── cell access (TileMapLayer / TileMap) ───────────────────────────
 
 static func _is_map(n: Node) -> bool:
 	return n.is_class("TileMapLayer") or n is TileMap
@@ -54,7 +56,7 @@ static func _used_cells(n: Node) -> Array:
 	return n.get_used_cells(0) if n is TileMap else n.call("get_used_cells")
 
 
-## Для UndoRedo: применить список [Vector2i, sid, atlas, alt].
+## For UndoRedo: apply a list of [Vector2i, sid, atlas, alt].
 func apply_cells(n: Node, data: Array) -> void:
 	if not is_instance_valid(n):
 		return
@@ -67,7 +69,7 @@ func _map(path) -> Dictionary:
 	if f.has("error"):
 		return f
 	if not _is_map(f.node):
-		return {"error": "%s это %s, а нужен TileMapLayer. Создайте его через tilemap_setup" % [t._rel(f.node), f.node.get_class()]}
+		return {"error": L.t("%s is %s, but a TileMapLayer is needed. Create one with tilemap_setup") % [t._rel(f.node), f.node.get_class()]}
 	return f
 
 
@@ -90,7 +92,7 @@ func _first_source(ts: TileSet) -> int:
 	return ts.get_source_id(0) if ts and ts.get_source_count() > 0 else -1
 
 
-# ─────────────────────────── инструменты ───────────────────────────
+# ─────────────────────────── tools ───────────────────────────
 
 func _t_tilemap_setup(args: Dictionary) -> Dictionary:
 	var root: Node = t._root()
@@ -100,21 +102,21 @@ func _t_tilemap_setup(args: Dictionary) -> Dictionary:
 	if tex_path.has("error"):
 		return t._err(tex_path.error)
 	if not ResourceLoader.exists(tex_path.path):
-		return t._err("картинка не найдена: " + tex_path.path)
+		return t._err(L.t("image not found: ") + tex_path.path)
 	var tex = load(tex_path.path)
 	if not tex is Texture2D:
-		return t._err("%s не картинка" % tex_path.path)
+		return t._err(L.t("%s is not an image") % tex_path.path)
 	var size := _vec2i(_json(args.tile_size), "tile_size")
 	if size.has("error"):
 		return t._err(size.error)
 	var ts_px: Vector2i = size.value
 	if ts_px.x <= 0 or ts_px.y <= 0:
-		return t._err("tile_size должен быть больше нуля, например [16, 16]")
+		return t._err(L.t("tile_size must be greater than zero, e.g. [16, 16]"))
 	var tex_size := Vector2i((tex as Texture2D).get_size())
 	var cols := tex_size.x / ts_px.x
 	var rows := tex_size.y / ts_px.y
 	if cols < 1 or rows < 1:
-		return t._err("картинка %dx%d меньше одной клетки %dx%d" % [tex_size.x, tex_size.y, ts_px.x, ts_px.y])
+		return t._err(L.t("image %dx%d is smaller than one tile %dx%d") % [tex_size.x, tex_size.y, ts_px.x, ts_px.y])
 
 	var tileset := TileSet.new()
 	tileset.tile_size = ts_px
@@ -144,7 +146,7 @@ func _t_tilemap_setup(args: Dictionary) -> Dictionary:
 	if f.has("node"):
 		node = f.node
 		if not _is_map(node):
-			return t._err("%s это %s, а не TileMapLayer" % [t._rel(node), node.get_class()])
+			return t._err(L.t("%s is %s, not a TileMapLayer") % [t._rel(node), node.get_class()])
 	else:
 		var p := str(args.path).strip_edges().trim_prefix("./")
 		var parent: Node = root
@@ -156,20 +158,20 @@ func _t_tilemap_setup(args: Dictionary) -> Dictionary:
 		node = ClassDB.instantiate("TileMapLayer") if ClassDB.class_exists("TileMapLayer") else TileMap.new()
 		node.name = p.get_file().validate_node_name()
 		created = true
-		ur.create_action("MCP: тайлмап " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+		ur.create_action(L.t("MCP: tilemap ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 		ur.add_do_method(parent, "add_child", node, true)
 		ur.add_do_method(node, "set_owner", root)
 		ur.add_do_reference(node)
 		ur.add_undo_method(parent, "remove_child", node)
 		ur.commit_action()
-	ur.create_action("MCP: тайлсет " + str(node.name), UndoRedo.MERGE_DISABLE, root)
+	ur.create_action(L.t("MCP: tileset ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 	ur.add_do_property(node, "tile_set", tileset)
 	ur.add_undo_property(node, "tile_set", node.tile_set)
 	ur.add_do_reference(tileset)
 	ur.commit_action()
-	return t._ok("%s %s: тайлсет %dx%d px из %s, %d тайлов (колонок %d, рядов %d, атлас-координаты от [0, 0] до [%d, %d])%s, source %d" % [
-		"Создан" if created else "Настроен", t._rel(node), ts_px.x, ts_px.y, tex_path.path, cols * rows, cols, rows,
-		cols - 1, rows - 1, ", с коллизией" if collision else "", sid])
+	return t._ok(L.t("%s %s: tileset %dx%d px from %s, %d tiles (%d columns, %d rows, atlas coords from [0, 0] to [%d, %d])%s, source %d") % [
+		L.t("Created") if created else L.t("Set up"), t._rel(node), ts_px.x, ts_px.y, tex_path.path, cols * rows, cols, rows,
+		cols - 1, rows - 1, L.t(", with collision") if collision else "", sid])
 
 
 func _t_tilemap_info(args: Dictionary) -> Dictionary:
@@ -180,9 +182,9 @@ func _t_tilemap_info(args: Dictionary) -> Dictionary:
 	var ts: TileSet = n.tile_set
 	var lines: Array = ["%s (%s)" % [t._rel(n), n.get_class()]]
 	if ts == null:
-		lines.append("Тайлсета нет. Создайте через tilemap_setup")
+		lines.append(L.t("No tileset. Create one with tilemap_setup"))
 		return t._ok("\n".join(lines))
-	lines.append("Размер тайла: %dx%d, физических слоёв: %d" % [ts.tile_size.x, ts.tile_size.y, ts.get_physics_layers_count()])
+	lines.append(L.t("Tile size: %dx%d, physics layers: %d") % [ts.tile_size.x, ts.tile_size.y, ts.get_physics_layers_count()])
 	for i in ts.get_source_count():
 		var sid := ts.get_source_id(i)
 		var src := ts.get_source(sid)
@@ -193,16 +195,16 @@ func _t_tilemap_info(args: Dictionary) -> Dictionary:
 				var c := a.get_tile_id(k)
 				coords.append("[%d, %d]" % [c.x, c.y])
 			var tex_path: String = a.texture.resource_path if a.texture else "?"
-			lines.append("Source %d: атлас %s, тайлов %d: %s%s" % [sid, tex_path, coords.size(), ", ".join(coords.slice(0, 64)),
+			lines.append(L.t("Source %d: atlas %s, %d tiles: %s%s") % [sid, tex_path, coords.size(), ", ".join(coords.slice(0, 64)),
 				" …" if coords.size() > 64 else ""])
 		else:
 			lines.append("Source %d: %s" % [sid, src.get_class()])
 	var used := _used_cells(n)
 	if used.is_empty():
-		lines.append("Нарисованных клеток нет")
+		lines.append(L.t("No painted cells"))
 	else:
 		var r := _bounds(used)
-		lines.append("Нарисовано клеток: %d, область [%d, %d] .. [%d, %d]" % [used.size(), r.position.x, r.position.y, r.end.x - 1, r.end.y - 1])
+		lines.append(L.t("Painted cells: %d, area [%d, %d] .. [%d, %d]") % [used.size(), r.position.x, r.position.y, r.end.x - 1, r.end.y - 1])
 	return t._ok("\n".join(lines))
 
 
@@ -220,9 +222,9 @@ func _collect_cells(args: Dictionary) -> Dictionary:
 	var raw_cells = _json(args.get("cells"))
 	if raw_cells != null:
 		if raw_cells is Array and raw_cells.size() >= 2 and (raw_cells[0] is float or raw_cells[0] is int):
-			raw_cells = [raw_cells]  # одна клетка [x, y]
+			raw_cells = [raw_cells]  # a single cell [x, y]
 		if not raw_cells is Array:
-			return {"error": "cells должен быть списком [[x, y], ...]"}
+			return {"error": L.t("cells must be a list [[x, y], ...]")}
 		for c in raw_cells:
 			var v := _vec2i(c, "cells")
 			if v.has("error"):
@@ -239,20 +241,20 @@ func _collect_cells(args: Dictionary) -> Dictionary:
 			nums = [raw_rect.get("x1", raw_rect.get("x", 0)), raw_rect.get("y1", raw_rect.get("y", 0)),
 				raw_rect.get("x2", 0), raw_rect.get("y2", 0)]
 		if nums.size() != 4:
-			return {"error": "rect должен быть [x1, y1, x2, y2]"}
+			return {"error": L.t("rect must be [x1, y1, x2, y2]")}
 		var x1 := int(nums[0])
 		var y1 := int(nums[1])
 		var x2 := int(nums[2])
 		var y2 := int(nums[3])
 		if (absi(x2 - x1) + 1) * (absi(y2 - y1) + 1) > MAX_CELLS:
-			return {"error": "слишком большая область, максимум %d клеток за вызов" % MAX_CELLS}
+			return {"error": L.t("area too large, at most %d cells per call") % MAX_CELLS}
 		for y in range(mini(y1, y2), maxi(y1, y2) + 1):
 			for x in range(mini(x1, x2), maxi(x1, x2) + 1):
 				cells.append(Vector2i(x, y))
 	if cells.is_empty():
-		return {"error": "укажите cells [[x, y], ...] или rect [x1, y1, x2, y2]"}
+		return {"error": L.t("give cells [[x, y], ...] or rect [x1, y1, x2, y2]")}
 	if cells.size() > MAX_CELLS:
-		return {"error": "слишком много клеток, максимум %d за вызов" % MAX_CELLS}
+		return {"error": L.t("too many cells, at most %d per call") % MAX_CELLS}
 	return {"cells": cells}
 
 
@@ -264,7 +266,7 @@ func _t_tilemap_paint(args: Dictionary) -> Dictionary:
 	var ts: TileSet = n.tile_set
 	var erase := bool(args.get("erase", false))
 	if ts == null and not erase:
-		return t._err("у %s нет тайлсета. Сначала tilemap_setup" % t._rel(n))
+		return t._err(L.t("%s has no tileset. Run tilemap_setup first") % t._rel(n))
 	var cc := _collect_cells(args)
 	if cc.has("error"):
 		return t._err(cc.error)
@@ -277,11 +279,11 @@ func _t_tilemap_paint(args: Dictionary) -> Dictionary:
 		atlas = tv.value
 		var src := ts.get_source(sid) if ts.has_source(sid) else null
 		if src == null:
-			return t._err("нет source %d в тайлсете" % sid)
+			return t._err(L.t("no source %d in the tileset") % sid)
 		if src is TileSetAtlasSource and not (src as TileSetAtlasSource).has_tile(atlas):
 			var a: TileSetAtlasSource = src
 			var size := a.get_atlas_grid_size()
-			return t._err("в атласе нет тайла [%d, %d]. Доступно от [0, 0] до [%d, %d] (см. tilemap_info)" % [atlas.x, atlas.y, size.x - 1, size.y - 1])
+			return t._err(L.t("the atlas has no tile [%d, %d]. Available from [0, 0] to [%d, %d] (see tilemap_info)") % [atlas.x, atlas.y, size.x - 1, size.y - 1])
 	var do_data: Array = []
 	var undo_data: Array = []
 	for c in cc.cells:
@@ -289,14 +291,14 @@ func _t_tilemap_paint(args: Dictionary) -> Dictionary:
 		undo_data.append([c, old[0], old[1], old[2]])
 		do_data.append([c, -1 if erase else sid, atlas, 0])
 	var ur: EditorUndoRedoManager = t._ur()
-	ur.create_action("MCP: тайлы " + str(n.name), UndoRedo.MERGE_DISABLE, t._root())
+	ur.create_action(L.t("MCP: tiles ") + str(n.name), UndoRedo.MERGE_DISABLE, t._root())
 	ur.add_do_method(self, "apply_cells", n, do_data)
 	ur.add_undo_method(self, "apply_cells", n, undo_data)
 	ur.commit_action()
 	var r := _bounds(cc.cells)
-	return t._ok("%s %d клеток в %s (область [%d, %d] .. [%d, %d])%s" % [
-		"Стёрто" if erase else "Нарисовано", cc.cells.size(), t._rel(n), r.position.x, r.position.y, r.end.x - 1, r.end.y - 1,
-		"" if erase else ", тайл [%d, %d]" % [atlas.x, atlas.y]])
+	return t._ok(L.t("%s %d cells in %s (area [%d, %d] .. [%d, %d])%s") % [
+		L.t("Erased") if erase else L.t("Painted"), cc.cells.size(), t._rel(n), r.position.x, r.position.y, r.end.x - 1, r.end.y - 1,
+		"" if erase else L.t(", tile [%d, %d]") % [atlas.x, atlas.y]])
 
 
 func _t_tilemap_read(args: Dictionary) -> Dictionary:
@@ -313,12 +315,12 @@ func _t_tilemap_read(args: Dictionary) -> Dictionary:
 		area = Rect2i(Vector2i(mini(x1, int(raw_rect[2])), mini(y1, int(raw_rect[3]))),
 			Vector2i(absi(int(raw_rect[2]) - x1) + 1, absi(int(raw_rect[3]) - y1) + 1))
 	elif used.is_empty():
-		return t._ok("%s: нарисованных клеток нет" % t._rel(n))
+		return t._ok(L.t("%s: no painted cells") % t._rel(n))
 	else:
 		area = _bounds(used)
 	var cut := ""
 	if area.size.x > MAX_READ_W or area.size.y > MAX_READ_H:
-		cut = "\n(показан угол %dx%d из %dx%d, уточните rect)" % [mini(area.size.x, MAX_READ_W), mini(area.size.y, MAX_READ_H), area.size.x, area.size.y]
+		cut = L.t("\n(showing the %dx%d corner of %dx%d, narrow it with rect)") % [mini(area.size.x, MAX_READ_W), mini(area.size.y, MAX_READ_H), area.size.x, area.size.y]
 		area.size = Vector2i(mini(area.size.x, MAX_READ_W), mini(area.size.y, MAX_READ_H))
 	var legend := {}
 	var rows: Array = []
@@ -338,6 +340,6 @@ func _t_tilemap_read(args: Dictionary) -> Dictionary:
 	for k in legend:
 		var parts: PackedStringArray = k.split(":")
 		var xy: PackedStringArray = parts[1].split(",")
-		leg.append("%s = тайл [%s, %s]%s" % [legend[k], xy[0], xy[1], (" (source %s)" % parts[0]) if parts[0] != str(_first_source(n.tile_set)) else ""])
-	var header := "%s: x от %d до %d, y от %d до %d. \".\" пусто" % [t._rel(n), area.position.x, area.end.x - 1, area.position.y, area.end.y - 1]
+		leg.append(L.t("%s = tile [%s, %s]%s") % [legend[k], xy[0], xy[1], (" (source %s)" % parts[0]) if parts[0] != str(_first_source(n.tile_set)) else ""])
+	var header := L.t("%s: x from %d to %d, y from %d to %d. \".\" is empty") % [t._rel(n), area.position.x, area.end.x - 1, area.position.y, area.end.y - 1]
 	return t._ok(header + "\n" + "\n".join(rows) + "\n" + ", ".join(leg) + cut)

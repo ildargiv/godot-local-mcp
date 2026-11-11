@@ -1,7 +1,9 @@
 @tool
 extends RefCounted
-## Минимальный HTTP/1.1-сервер на TCPServer, только 127.0.0.1.
-## Обслуживает POST /mcp (JSON-RPC). Каждое соединение закрывается после ответа.
+
+const L := preload("res://addons/local_mcp/lang.gd")
+## Minimal HTTP/1.1 server on TCPServer, 127.0.0.1 only.
+## Serves POST /mcp (JSON-RPC). Every connection is closed after the response.
 
 const MAX_BODY := 4 * 1024 * 1024
 const MAX_HEADER := 16 * 1024
@@ -9,7 +11,7 @@ const CONN_TIMEOUT_MS := 10000
 
 ## Callable(body: String) -> Dictionary {"status": int, "body": String}
 var handler: Callable
-## Пустая строка отключает проверку токена.
+## An empty string disables the token check.
 var token := ""
 
 var _tcp := TCPServer.new()
@@ -17,7 +19,7 @@ var _conns: Array = []  # [{peer, buf, started}]
 var _busy := false
 
 
-## Пытается занять порт из диапазона [port, port+9]. Возвращает занятый порт или -1.
+## Tries to bind a port in [port, port+9]. Returns the bound port or -1.
 func start(port: int) -> int:
 	for p in range(port, port + 10):
 		if _tcp.listen(p, "127.0.0.1") == OK:
@@ -33,9 +35,9 @@ func stop() -> void:
 
 
 func poll() -> void:
-	# Сохранение сцены и запуск игры показывают прогресс-диалог, который крутит
-	# главный цикл редактора изнутри обработчика. Без этой защиты _process
-	# снова зайдёт сюда и обработает тот же запрос повторно.
+	# Saving a scene and running the game show a progress dialog that pumps
+	# the editor main loop from inside the handler. Without this guard _process
+	# would re-enter here and handle the same request again.
 	if _busy:
 		return
 	_busy = true
@@ -55,7 +57,7 @@ func _poll_inner() -> void:
 	_conns = still
 
 
-## true — соединение ещё живо и ждёт данных.
+## true: the connection is still alive and waiting for data.
 func _poll_conn(c: Dictionary) -> bool:
 	var peer: StreamPeerTCP = c.peer
 	peer.poll()
@@ -68,7 +70,7 @@ func _poll_conn(c: Dictionary) -> bool:
 	if avail > 0:
 		var res := peer.get_data(avail)
 		if res[0] == OK:
-			# PackedByteArray передаётся по значению, поэтому пишем обратно в словарь.
+			# PackedByteArray is passed by value, so write it back into the dictionary.
 			var grown: PackedByteArray = c.buf
 			grown.append_array(res[1])
 			c.buf = grown
@@ -101,7 +103,7 @@ func _poll_conn(c: Dictionary) -> bool:
 		return false
 	var body_start := head_end + 4
 	if buf.size() - body_start < length:
-		return true  # ждём остаток тела
+		return true  # waiting for the rest of the body
 
 	var body := buf.slice(body_start, body_start + length).get_string_from_utf8()
 	_dispatch(peer, method, path, headers, body)
@@ -109,7 +111,7 @@ func _poll_conn(c: Dictionary) -> bool:
 
 
 func _dispatch(peer: StreamPeerTCP, method: String, path: String, headers: Dictionary, body: String) -> void:
-	# Защита от DNS rebinding: браузерный Origin допускаем только локальный.
+	# DNS rebinding protection: only a local browser Origin is allowed.
 	var origin: String = headers.get("origin", "")
 	if origin != "" and not (origin.begins_with("http://127.0.0.1") or origin.begins_with("http://localhost")):
 		_send(peer, 403, "text/plain", "forbidden origin")
@@ -120,7 +122,7 @@ func _dispatch(peer: StreamPeerTCP, method: String, path: String, headers: Dicti
 	if token != "":
 		var auth: String = headers.get("authorization", "")
 		if auth != "Bearer " + token:
-			_send(peer, 401, "text/plain", "missing or wrong token (см. local_mcp.json)")
+			_send(peer, 401, "text/plain", L.t("missing or wrong token (see local_mcp.json)"))
 			return
 	match method:
 		"POST":
@@ -133,7 +135,7 @@ func _dispatch(peer: StreamPeerTCP, method: String, path: String, headers: Dicti
 		"DELETE":
 			_send(peer, 200, "text/plain", "")
 		"GET":
-			# Поток SSE не поддерживаем: сервер ничего не шлёт по своей инициативе.
+			# No SSE stream: the server never sends anything on its own.
 			_send(peer, 405, "text/plain", "SSE not supported")
 		_:
 			_send(peer, 405, "text/plain", "method not allowed")

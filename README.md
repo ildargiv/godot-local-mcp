@@ -1,143 +1,177 @@
 # Godot Local MCP
 
-Компактный MCP-сервер для редактора Godot 4.2+, рассчитанный на локальные модели (Qwen, DeepSeek и другие).
-Сервер живёт прямо в плагине редактора и отвечает по HTTP. Node.js, npm и отдельный процесс не нужны.
+**English** | [Русский](README.ru.md)
 
-## Чем отличается
+A compact MCP server for the Godot 4.2+ editor, built for local models (Qwen, DeepSeek and others).
+The server lives inside an editor plugin and speaks HTTP. No Node.js, no npm, no separate process.
 
-- **18 инструментов, около 1,8 тыс. токенов на все схемы.** Плоские схемы без режимов, описания в одну строку.
-- **Прощает ошибки модели.** Тип значения берётся из самого свойства, поэтому вектор можно передать как `[100, 50]`,
-  `"100, 50"`, `"Vector2(100, 50)"` или `{"x": 100, "y": 50}`, цвет как `"red"`, `"#ff8800"` или `[1, 0.5, 0]`,
-  enum по имени (`"Floating"`), ресурс как `"res://icon.png"` или `{"type": "CircleShape2D", "radius": 16}`.
-  Принимаются синонимы аргументов (`node_path` вместо `path`, `class_name` вместо `type` и т.д.), `camelCase` вместо
-  `snake_case`, обёртка ```` ```gdscript ```` вокруг кода.
-- **Правка скриптов без побайтового совпадения.** `script_edit` находит фрагмент без учёта отступов и сам выравнивает
-  табы, либо заменяет строки по номерам. После записи GDScript сразу проверяется на ошибки (с номером строки на 4.5+).
-- **Короткие ответы текстом.** Ошибка всегда говорит, что исправить: «узел "Plyer" не найден; дети ".": Player, Camera2D»,
-  «нет свойства positon (похожие: position)».
-- **Всё через Undo.** Любую правку модели можно откатить Ctrl+Z в редакторе.
-- **Вывод игры без мусора.** `game_output` показывает print и ошибки ваших скриптов, а служебные сообщения движка
-  (драйверы, звук) скрывает.
+## What makes it different
 
-## Инструменты
+- **18 tools, about 1.8k tokens for all schemas.** Flat schemas with no modes, one-line descriptions.
+- **Forgiving with model mistakes.** The value type comes from the property itself, so a vector can be passed as
+  `[100, 50]`, `"100, 50"`, `"Vector2(100, 50)"` or `{"x": 100, "y": 50}`, a color as `"red"`, `"#ff8800"` or
+  `[1, 0.5, 0]`, an enum by name (`"Floating"`), a resource as `"res://icon.png"` or `{"type": "CircleShape2D", "radius": 16}`.
+  Argument aliases are accepted (`node_path` for `path`, `class_name` for `type` and so on), `camelCase` instead of
+  `snake_case`, booleans and numbers sent as strings (`"True"`, `"32"`), and a ```` ```gdscript ```` fence around code.
+- **Script edits without a byte-exact match.** `script_edit` finds the fragment ignoring indentation and re-indents it
+  itself, or replaces lines by number. GDScript is checked for errors right after writing (with line numbers on 4.5+).
+- **Short text replies.** An error always says what to fix: `node "Plyer" not found; children of ".": Player, Camera2D`,
+  `no such property positon (similar: position)`.
+- **Everything goes through Undo.** Any edit made by the model can be reverted with Ctrl+Z in the editor.
+- **Clean game output.** `game_output` shows your scripts' `print` lines and errors and hides engine service messages
+  (drivers, audio). If the debugger paused the game on an error, the reply says so and points to the line.
+- **Replies in your language.** They follow the editor language, with English as the fallback; English, Russian,
+  Chinese, Spanish, German, French, Portuguese and Japanese are built in (see [Languages](#languages)).
 
-| Группа | Инструменты |
+## Tools
+
+| Group | Tools |
 |---|---|
-| Проект и сцена | `project_info`, `scene_tree`, `scene_open`, `scene_new`, `scene_save` |
-| Узлы | `node_add`, `node_info`, `node_set`, `node_delete`, `node_move`, `signal_connect` |
-| Скрипты | `script_read`, `script_write`, `script_edit` |
-| Игра | `game_run`, `game_stop`, `game_output` |
-| Справка | `class_info` |
+| Project and scene | `project_info`, `scene_tree`, `scene_open`, `scene_new`, `scene_save` |
+| Nodes | `node_add`, `node_info`, `node_set`, `node_delete`, `node_move`, `signal_connect` |
+| Scripts | `script_read`, `script_write`, `script_edit` |
+| Game | `game_run`, `game_stop`, `game_output` |
+| Reference | `class_info` |
 
-### Подключаемые группы
+### Optional groups
 
-Выключены по умолчанию, чтобы не раздувать список инструментов. Включаются галочкой в Project Settings →
-`local_mcp/groups/<группа>` (после этого переподключите клиента) или переменной окружения редактора
-`LOCAL_MCP_GROUPS=tilemap,animation` (`all` включает все).
+Off by default so the tool list stays small. Enable them with a checkbox in Project Settings →
+`local_mcp/groups/<group>` (then reconnect the client) or with the editor environment variable
+`LOCAL_MCP_GROUPS=tilemap,animation` (`all` enables every group).
 
-| Группа | Инструменты | Что умеет |
+| Group | Tools | What it does |
 |---|---|---|
-| `tilemap` | `tilemap_setup`, `tilemap_info`, `tilemap_paint`, `tilemap_read` | Тайлсет из картинки одной командой (с коллизией), рисование клетками и прямоугольниками, стирание, карта текстом с легендой |
-| `animation` | `anim_create`, `anim_key`, `anim_info` | AnimationPlayer и анимации, ключи любого свойства в свободном формате значений, цикл и автозапуск |
+| `tilemap` | `tilemap_setup`, `tilemap_info`, `tilemap_paint`, `tilemap_read` | A tileset from an image in one call (with collision), painting by cells and rectangles, erasing, the map as text with a legend |
+| `animation` | `anim_create`, `anim_key`, `anim_info` | AnimationPlayer and animations, keys for any property in a free value format, loop and autoplay |
 
-Со всеми группами 25 инструментов, около 2,5 тыс. токенов на схемы.
+With every group enabled there are 25 tools, about 2.5k tokens of schemas.
 
-## Установка
+## Installation
 
-1. Скопируйте папку `addons/local_mcp` в `addons/` вашего проекта.
+1. Copy the `addons/local_mcp` folder into your project's `addons/`.
 2. Project → Project Settings → Plugins → **Local MCP** → Enable.
-3. В Output появится `[LocalMCP] слушаю http://127.0.0.1:6600/mcp`, а в корне проекта файл `local_mcp.json`
-   с готовым конфигом и токеном.
+3. The Output panel shows `[LocalMCP] listening on http://127.0.0.1:6600/mcp`, and a `local_mcp.json` file with a
+   ready-made config and token appears in the project root.
 
-## Подключение клиента
+## Connecting a client
 
-**Клиенты с поддержкой HTTP (Streamable HTTP)**, например LM Studio: скопируйте блок `mcpServers` из `local_mcp.json`:
+**Clients with HTTP support (Streamable HTTP)**, such as LM Studio: copy the `mcpServers` block from `local_mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "godot": {
       "url": "http://127.0.0.1:6600/mcp",
-      "headers": { "Authorization": "Bearer <токен из local_mcp.json>" }
+      "headers": { "Authorization": "Bearer <token from local_mcp.json>" }
     }
   }
 }
 ```
 
-Токен меняется при каждом запуске редактора. Если это неудобно, выключите `local_mcp/require_token` в настройках
-проекта (сервер всё равно слушает только 127.0.0.1).
+The token changes every time the editor starts. If that is inconvenient, turn off `local_mcp/require_token` in Project
+Settings (the server still listens on 127.0.0.1 only).
 
-**Клиенты, которые умеют только stdio**: используйте мост на Python (только стандартная библиотека, Python 3.10+).
-Он сам берёт порт и свежий токен из проекта:
+**Clients that only speak stdio**: use the Python bridge (standard library only, Python 3.10+).
+It picks up the port and the fresh token from the project by itself:
 
 ```json
 {
   "mcpServers": {
     "godot": {
       "command": "python3",
-      "args": ["/путь/к/проекту/addons/local_mcp/bridge/stdio_bridge.py", "--project", "/путь/к/проекту"]
+      "args": ["/path/to/project/addons/local_mcp/bridge/stdio_bridge.py", "--project", "/path/to/project"]
     }
   }
 }
 ```
 
-На Windows вместо `python3` обычно `python` или `py`.
+On Windows use `python` or `py` instead of `python3`.
 
 ### LM Studio
 
-В LM Studio откройте вкладку Program → Install → Edit `mcp.json` (файл `%USERPROFILE%\.lmstudio\mcp.json`)
-и добавьте сервер `godot` из `local_mcp.json`. Для модели включите tool calling и контекст от 16k.
+In LM Studio open Program → Install → Edit `mcp.json` (the file `%USERPROFILE%\.lmstudio\mcp.json`) and add the
+`godot` server from `local_mcp.json`. Enable tool calling for the model and use a context of 16k or more.
 
-## Стенд для проверки моделей
+## Languages
 
-`bench/run_bench.py` гоняет 12 типовых задач (две последние, тайлмап и анимация, только при включённых группах) (собрать игрока, UI, написать скрипт, подключить сигнал, починить
-синтаксис, перенести и удалить узлы, настроить свойства, запустить игру и прочитать вывод, найти и исправить ошибку
-в рантайме, найти нужный сигнал по описанию) через любую OpenAI-совместимую модель и проверяет результат в сцене.
+Plugin replies (results, errors, hints) are translated; tool names, schemas and descriptions stay in English, which
+every model understands.
 
-Подготовка: откройте в редакторе любой проект с `icon.svg` в корне (подойдёт новый пустой) и включите плагин.
-Стенд создаёт свои сцены в `res://bench_runs/` и вашу работу не трогает.
+| Setting | Value |
+|---|---|
+| Project Settings → `local_mcp/language` | `auto` (default) follows the editor language; or `en`, `ru`, `zh`, `es`, `de`, `fr`, `pt`, `ja` |
+| Editor environment variable `LOCAL_MCP_LANG` | Overrides the setting, e.g. `LOCAL_MCP_LANG=en` |
+| Per request: `params._meta.lang` in `tools/call` | For clients and scripts that want a specific language for one call |
+
+An unknown language falls back to English. Small models usually do best with English replies, so set `en` if a model
+struggles in your language.
+
+**Adding a language** takes one file: copy `addons/local_mcp/lang/ru.json` to `lang/<code>.json` (for example `it.json`)
+and translate the values. Keys are the English source strings; keep `%s`/`%d` in the same order. The new code shows up in
+the setting automatically. Pull requests are welcome.
+
+The plugin does not rely on the editor's translated UI: it finds the Output panel and the debugger's Errors tab by
+their content, so game errors are read the same way in an English, Russian, German, Chinese or Japanese editor.
+
+## Model bench
+
+`bench/run_bench.py` runs 12 typical tasks through any OpenAI-compatible model and checks the result in the scene:
+build a player, a UI, write a script, connect a signal, fix syntax, move and delete nodes, set properties, run the game
+and read its output, find and fix a runtime error, find the right signal from a description, and (with the groups
+enabled) a tile level and an animation.
+
+Setup: open any project with `icon.svg` in its root in the editor (a new empty one will do) and enable the plugin.
+The bench creates its scenes in `res://bench_runs/` and does not touch your work.
 
 ```bash
-# LM Studio, llama.cpp, vLLM, в том числе по Tailscale
+# LM Studio, llama.cpp, vLLM, also over Tailscale
 python bench/run_bench.py --project "C:/Games/BenchProj" --base-url http://100.x.x.x:1234/v1 --model qwen3-next
 # Ollama
 python bench/run_bench.py --project "C:/Games/BenchProj" --base-url http://localhost:11434/v1 --model qwen3-next
 # DeepSeek API
 set DEEPSEEK_API_KEY=sk-...
 python bench/run_bench.py --project "C:/Games/BenchProj" --base-url https://api.deepseek.com/v1 --model deepseek-chat --api-key-env DEEPSEEK_API_KEY
-# Проверить сам стенд без модели (эталонные решения, должно быть 10/10)
+# Check the bench itself without a model (reference solutions, should be 12/12 with the groups enabled)
 python bench/run_bench.py --project "C:/Games/BenchProj" --golden
 ```
 
-Полезные флаги: `--tasks player,fix` (только эти задачи), `--repeat 3` (каждую задачу трижды, для статистики),
-`--max-steps 25`, `--temperature 0.2`.
+Useful flags: `--tasks player,fix` (only these tasks), `--repeat 3` (each task three times, for statistics),
+`--max-steps 25`, `--temperature 0.2`, `--lang ru` (task prompts in Russian), `--reply-lang en` (plugin replies to the
+model in this language; by default the plugin setting).
 
-Что считается: решена ли задача, сколько вызовов и сколько из них с ошибкой, битый JSON в аргументах, вызовы,
-пришедшие текстом `<tool_call>` вместо поля `tool_calls` (значит, сервер модели не распознал формат), вызовы
-несуществующих инструментов, токены. Полная переписка по каждой задаче сохраняется в `bench/results/*.json`.
+What is counted: whether the task is solved, how many calls and how many of them failed, broken JSON in arguments,
+calls that came as `<tool_call>` text instead of the `tool_calls` field (the model server did not recognise the
+format), calls to tools that do not exist, tokens. The full transcript of every task is saved in `bench/results/*.json`.
 
-## Настройки проекта
+Result on Qwen 3.8 Next (local, IQ3_XXS, Windows, Russian editor): 36/36 (12 tasks × 3), 3 failed calls out of 320,
+no broken JSON.
 
-| Настройка | По умолчанию | Что делает |
+## Project settings
+
+| Setting | Default | What it does |
 |---|---|---|
-| `local_mcp/port` | 6600 | Первый порт; если занят, берётся следующий до +9 |
-| `local_mcp/require_token` | true | Требовать токен в заголовке `Authorization` |
+| `local_mcp/port` | 6600 | First port; if taken, the next one up to +9 is used |
+| `local_mcp/require_token` | true | Require the token in the `Authorization` header |
+| `local_mcp/language` | auto | Reply language, see [Languages](#languages) |
+| `local_mcp/groups/<group>` | false | Enable an optional tool group |
 
-## Безопасность
+## Security
 
-- Слушает только `127.0.0.1`, запросы с чужим `Origin` отклоняются (защита от DNS rebinding).
-- Файлы только внутри `res://`; папки `addons/local_mcp` и `.godot` закрыты для записи.
-- Нет выполнения произвольного кода: модель пишет скрипты в файлы, вы их видите.
+- Listens on `127.0.0.1` only; requests with a foreign `Origin` are rejected (DNS rebinding protection).
+- Files only inside `res://`; the `addons/local_mcp` and `.godot` folders are closed for writing.
+- No arbitrary code execution: the model writes scripts to files that you can see.
 
-## Ограничения версии 0.1
+## Limitations of version 0.1
 
-- Подробности ошибок компиляции приходят модели на Godot 4.5+ (класс `Logger`). На 4.2–4.4 модель узнаёт, что ошибка
-  есть, а текст видно в панели Output.
-- `game_output` читает `user://logs/godot.log`, поэтому в проекте должна быть включена настройка
-  `debug/file_logging/enable_file_logging` (на десктопе она включена по умолчанию).
-- Пока нет: скриншотов, чтения живых узлов и ввода в запущенную игру. Это следующие группы.
+- Compile error details reach the model on Godot 4.5+ (the `Logger` class). On 4.2–4.4 the model learns that there is
+  an error, and the text is visible in the Output panel.
+- After the game stops, `game_output` reads `user://logs/godot.log`, so the project needs
+  `debug/file_logging/enable_file_logging` (on by default on desktop).
+- Not yet: screenshots, reading live nodes and input into the running game. These are the next groups.
 
-## Проверено
+## Tested
 
-Godot 4.5.1 (Linux, редактор под виртуальным дисплеем): все 18 инструментов, мост stdio, запуск игры и чтение её
-ошибок; стенд на эталонных решениях 12/12; русский интерфейс редактора. Остальные версии 4.2+ и Windows пока не проверялись.
+Godot 4.5.1 on Linux (editor under a virtual display) and Windows (model bench): all 25 tools, the stdio bridge, running the game
+and reading its errors; the bench on reference solutions 12/12 with replies in English, Russian and Chinese; reading
+game errors with the editor UI in English, Russian, German, Chinese and Japanese. Other 4.2+ versions have not been
+tested yet.
