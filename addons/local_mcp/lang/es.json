@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] escuchando en http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "Copia el bloque que necesites en la configuración de tu cliente MCP. Este archivo se reescribe cada vez que se inicia el editor.",
  "missing or wrong token (see local_mcp.json)": "token ausente o incorrecto (ver local_mcp.json)",
- "\"%s\": %s s, %s": "\"%s\": %s s, %s"
+ "\"%s\": %s s, %s": "\"%s\": %s s, %s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s forma parte de la escena instanciada %s (nodo %s). Godot no guarda cambios de estructura dentro de una instancia: edita %s directamente (scene_open) o cambia aquí solo propiedades con node_set",
+ "%s: the engine stored %s instead of %s": "%s: el motor guardó %s en lugar de %s",
+ "Part of the instance %s (%s): only properties can be changed here": "Parte de la instancia %s (%s): aquí solo se pueden cambiar propiedades",
+ "\nNote: ": "\nNota: ",
+ "\nThe node was added. Fix the properties with node_set on %s": "\nEl nodo se añadió. Corrige las propiedades con node_set en %s",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "la clase %s (%s) no se puede añadir: el script no compila o no hereda de un nodo. Revísalo con script_read",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s ya está declarado en %s. Elige otro nombre",
+ "value not applied: %s is %s, its parts are %s": "valor no aplicado: %s es %s, sus partes son %s",
+ "value not applied: no such sub-property": "valor no aplicado: no existe esa subpropiedad",
+ "value not applied: the property is read-only or rejected the value": "valor no aplicado: la propiedad es de solo lectura o rechazó el valor"
 }

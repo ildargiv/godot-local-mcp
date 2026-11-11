@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] écoute sur http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "Copiez le bloc voulu dans la configuration de votre client MCP. Ce fichier est réécrit à chaque démarrage de l'éditeur.",
  "missing or wrong token (see local_mcp.json)": "jeton absent ou incorrect (voir local_mcp.json)",
- "\"%s\": %s s, %s": "\"%s\": %s s, %s"
+ "\"%s\": %s s, %s": "\"%s\": %s s, %s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s fait partie de la scène instanciée %s (nœud %s). Godot n'enregistre pas les changements de structure dans une instance : modifiez %s elle-même (scene_open), ou ne changez ici que des propriétés avec node_set",
+ "%s: the engine stored %s instead of %s": "%s : le moteur a enregistré %s au lieu de %s",
+ "Part of the instance %s (%s): only properties can be changed here": "Partie de l'instance %s (%s) : seules les propriétés peuvent être modifiées ici",
+ "\nNote: ": "\nRemarque : ",
+ "\nThe node was added. Fix the properties with node_set on %s": "\nLe nœud a été ajouté. Corrigez les propriétés avec node_set sur %s",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "la classe %s (%s) ne peut pas être ajoutée : le script ne compile pas ou n'hérite pas d'un nœud. Vérifiez-le avec script_read",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s est déjà déclaré dans %s. Choisissez un autre nom",
+ "value not applied: %s is %s, its parts are %s": "valeur non appliquée : %s est de type %s, ses composantes sont %s",
+ "value not applied: no such sub-property": "valeur non appliquée : cette sous-propriété n'existe pas",
+ "value not applied: the property is read-only or rejected the value": "valeur non appliquée : la propriété est en lecture seule ou a refusé la valeur"
 }

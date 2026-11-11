@@ -115,9 +115,10 @@ their content, so game errors are read the same way in an English, Russian, Germ
 
 ## Model bench
 
-`bench/run_bench.py` runs 12 typical tasks through any OpenAI-compatible model and checks the result in the scene:
+`bench/run_bench.py` runs 15 typical tasks through any OpenAI-compatible model and checks the result in the scene:
 build a player, a UI, write a script, connect a signal, fix syntax, move and delete nodes, set properties, run the game
-and read its output, find and fix a runtime error, find the right signal from a description, and (with the groups
+and read its output, find and fix a runtime error, find the right signal from a description, write a `class_name`
+script and add a node of that class, edit a scene instance, recover from a wrong property name, and (with the groups
 enabled) a tile level and an animation.
 
 Setup: open any project with `icon.svg` in its root in the editor (a new empty one will do) and enable the plugin.
@@ -131,7 +132,7 @@ python bench/run_bench.py --project "C:/Games/BenchProj" --base-url http://local
 # DeepSeek API
 set DEEPSEEK_API_KEY=sk-...
 python bench/run_bench.py --project "C:/Games/BenchProj" --base-url https://api.deepseek.com/v1 --model deepseek-chat --api-key-env DEEPSEEK_API_KEY
-# Check the bench itself without a model (reference solutions, should be 12/12 with the groups enabled)
+# Check the bench itself without a model (reference solutions, should be 15/15 with the groups enabled)
 python bench/run_bench.py --project "C:/Games/BenchProj" --golden
 ```
 
@@ -139,7 +140,8 @@ Useful flags: `--tasks player,fix` (only these tasks), `--repeat 3` (each task t
 `--max-steps 25`, `--temperature 0.2`, `--lang ru` (task prompts in Russian), `--reply-lang en` (plugin replies to the
 model in this language; by default the plugin setting).
 
-What is counted: whether the task is solved, how many calls and how many of them failed, broken JSON in arguments,
+What is counted: whether the task is solved, how many calls and how many of them failed, silent failures (a success
+reply that still says "Not applied"), broken JSON in arguments,
 calls that came as `<tool_call>` text instead of the `tool_calls` field (the model server did not recognise the
 format), calls to tools that do not exist, tokens. The full transcript of every task is saved in `bench/results/*.json`.
 

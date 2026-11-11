@@ -4,7 +4,9 @@ Each task has:
   setup(g, ctx)  - prepares the scene with direct MCP calls (the model does not see this);
   prompt         - what we ask the model, per language ({"en": ..., "ru": ...}), the way a person would ask;
   check(g, ctx, answer) -> list[str] - failed checks (empty = solved);
-  golden         - reference call sequence used to verify the bench itself.
+  golden         - reference call sequence used to verify the bench itself: (tool, args) or
+                   (tool, args, expect), where expect may hold "error": bool (the reply must or must not
+                   be an error) and "text": regex the reply must match. A mismatch fails the task.
 
 ctx["scene"] is this run's scene path, ctx["dir"] the folder for this run's files.
 Setup and checks run with plugin replies forced to English (see GodotMcp.lang), so they work
@@ -304,6 +306,109 @@ def c_anim(g, ctx, answer):
     return fails
 
 
+def read_text(g, path):
+    """Text of a project file as saved on disk (script_read works for any text file)."""
+    text, err = g.call("script_read", path=path, start_line=1, end_line=100000)
+    if err:
+        return ""
+    return "\n".join(l.split("| ", 1)[1] if "| " in l else "" for l in text.split("\n")[1:])
+
+
+def tscn_section(text, header_re):
+    """Body of the first [...] section of a .tscn whose header matches header_re, or None."""
+    lines = text.split("\n")
+    for i, l in enumerate(lines):
+        if l.startswith("[") and re.search(header_re, l):
+            body = []
+            for b in lines[i + 1:]:
+                if b.startswith("["):
+                    break
+                body.append(b)
+            return "\n".join(body)
+    return None
+
+
+# Regressions for replies that used to say "success" when nothing (or not everything) happened.
+
+ENEMY_CODE = ("@tool\nclass_name Enemy{secret}\nextends Node2D\n\nsignal died(enemy: Enemy{secret})\n\n"
+              "var hp = 3\n")
+
+
+def t_classname_setup(g, ctx):
+    new_scene(g, ctx)
+
+
+def c_classname(g, ctx, answer):
+    path = ctx["dir"] + "/enemy.gd"
+    ok, body = script_ok(g, path)
+    if not body:
+        return [f"no file {path}"]
+    fails = []
+    if not ok:
+        fails.append("enemy.gd does not compile")
+    if f"class_name Enemy{ctx['secret']}" not in body:
+        fails.append("enemy.gd has no class_name Enemy" + str(ctx["secret"]))
+    b = info(g, "Boss")
+    if b is None:
+        fails.append("no Boss node")
+    elif path not in b:
+        fails.append("Boss does not have the enemy.gd script")
+    return fails
+
+
+def t_instance_setup(g, ctx):
+    child = ctx["dir"] + "/child.tscn"
+    text, err = g.call("scene_new", path=child, type="Node2D", name="Child")
+    if err:
+        raise RuntimeError(text)
+    g.call("node_add", type="Sprite2D", name="Pic", properties={"texture": "res://icon.svg"})
+    g.call("scene_save")
+    new_scene(g, ctx)
+    g.call("node_add", type=child, name="Sub")
+    g.call("scene_save")
+
+
+def c_instance(g, ctx, answer):
+    fails = []
+    scene = read_text(g, ctx["scene"])
+    pic = tscn_section(scene, r'name="Pic" parent="Sub"')
+    if pic is None or not re.search(r"^visible = false", pic, re.M):
+        fails.append("Sub/Pic is not hidden in the saved scene")
+    tag = tscn_section(scene, r'name="Tag" type="Label" parent="Sub"')
+    if tag is None:
+        fails.append("no Label Tag under Sub in the saved scene")
+    elif 'text = "boss"' not in tag:
+        fails.append("Tag text is not boss")
+    child = read_text(g, ctx["dir"] + "/child.tscn")
+    if 'name="Pic" type="Sprite2D"' not in child or "visible = false" in child or "Tag" in child:
+        fails.append("child.tscn was changed")
+    return fails
+
+
+def t_hitbox_setup(g, ctx):
+    new_scene(g, ctx)
+    g.call("node_add", type="CharacterBody2D", name="Player")
+
+
+def c_hitbox(g, ctx, answer):
+    fails = []
+    scene = read_text(g, ctx["scene"])
+    hb = tscn_section(scene, r'name="Hitbox" type="CollisionShape2D" parent="Player"')
+    if hb is None:
+        return ["no Player/Hitbox CollisionShape2D in the saved scene"]
+    if not re.search(r"^position = Vector2\(0, -8\)", hb, re.M):
+        fails.append("Hitbox is not at (0, -8)")
+    m = re.search(r'^shape = SubResource\("([^"]+)"\)', hb, re.M)
+    shape = tscn_section(scene, rf'type="RectangleShape2D" id="{re.escape(m.group(1))}"') if m else None
+    if shape is None:
+        fails.append("Hitbox has no RectangleShape2D")
+    elif not re.search(r"^size = Vector2\(40, 20\)", shape, re.M):
+        fails.append("the rectangle is not 40x20")
+    if re.search(r'name="Hitbox\d+"', scene):
+        fails.append("a duplicate Hitbox node was created")
+    return fails
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 TASKS = [
@@ -461,6 +566,60 @@ TASKS = [
             ("node_add", {"type": "Area2D", "name": "Pickup"}),
             ("node_add", {"parent": "Pickup", "type": "CollisionShape2D", "properties": {"shape": {"type": "CircleShape2D", "radius": 16}}}),
             ("signal_connect", {"from": "Pickup", "signal": "body_entered", "to": ".", "method": "_on_pickup_body_entered"}),
+            ("scene_save", {}),
+        ],
+    },
+    {
+        "id": "classname",
+        "setup": t_classname_setup,
+        "prompt": {
+            "en": "Create a script {dir}/enemy.gd: a Node2D class with class_name Enemy{secret}, a variable hp = 3 and a signal died(enemy: Enemy{secret}). Then add a node of the class Enemy{secret} named Boss to the scene. Save.",
+            "ru": "Создай скрипт {dir}/enemy.gd: класс на Node2D с class_name Enemy{secret}, переменной hp = 3 и сигналом "
+                  "died(enemy: Enemy{secret}). Затем добавь в сцену узел класса Enemy{secret} с именем Boss. Сохрани.",
+        },
+        "check": c_classname,
+        "golden": [
+            # A self-reference in a class_name script used to fail the check, and a new class_name
+            # was unknown to node_add until the editor rescanned the files.
+            ("script_write", {"path": "{dir}/enemy.gd", "content": ENEMY_CODE}, {"error": False, "text": "Check: no errors"}),
+            ("node_add", {"type": "Enemy{secret}", "name": "Boss"}, {"error": False}),
+            ("scene_save", {}),
+        ],
+    },
+    {
+        "id": "instance",
+        "setup": t_instance_setup,
+        "prompt": {
+            "en": "The Sub node in the open scene is an instance of {dir}/child.tscn. In this scene only (do not change child.tscn) hide its Pic sprite and add to Sub a Label named Tag with the text boss. Save.",
+            "ru": "Узел Sub в открытой сцене это инстанс {dir}/child.tscn. Только в этой сцене (child.tscn не меняй) "
+                  "скрой его спрайт Pic и добавь в Sub метку Label с именем Tag и текстом boss. Сохрани.",
+        },
+        "check": c_instance,
+        "golden": [
+            # Deleting a node inside an instance is not saved by Godot: it must be an error, not "Deleted".
+            ("node_delete", {"path": "Sub/Pic"}, {"error": True}),
+            ("node_set", {"path": "Sub/Pic", "properties": {"visible": False}}, {"error": False}),
+            ("node_add", {"parent": "Sub", "type": "Label", "name": "Tag", "properties": {"text": "boss"}}, {"error": False}),
+            ("scene_tree", {}, {"text": r"Tag \(Label\)"}),
+            ("scene_save", {}),
+        ],
+    },
+    {
+        "id": "hitbox",
+        "setup": t_hitbox_setup,
+        "prompt": {
+            "en": "Give Player a CollisionShape2D named Hitbox with a 40x20 rectangle shape, raised 8 pixels (position y = -8). Save.",
+            "ru": "Добавь Player узел CollisionShape2D с именем Hitbox и прямоугольной формой 40x20, поднятый на 8 пикселей (position y = -8). Сохрани.",
+        },
+        "check": c_hitbox,
+        "golden": [
+            # Godot 3 property name: the node is created, but the reply must be an error.
+            ("node_add", {"parent": "Player", "type": "CollisionShape2D", "name": "Hitbox",
+                          "properties": {"shape": {"type": "RectangleShape2D", "extents": [20, 10]}}}, {"error": True}),
+            # A Vector2 has no z: used to reply "position:z=null" as a success.
+            ("node_set", {"path": "Player/Hitbox", "properties": {"position:z": -8}}, {"error": True}),
+            ("node_set", {"path": "Player/Hitbox", "properties": {"shape": {"type": "RectangleShape2D", "size": [40, 20]},
+                                                                   "position:y": -8}}, {"error": False}),
             ("scene_save", {}),
         ],
     },
