@@ -105,6 +105,27 @@ def extract_calls(msg: dict, stats: dict) -> list:
 
 # ───────────────────────────── running a task ─────────────────────────────
 
+def _not_applied_markers() -> list:
+    """The "Not applied:" label in every reply language: a success reply containing it is a silent failure."""
+    out = {"Not applied:"}
+    lang_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "addons", "local_mcp", "lang")
+    if os.path.isdir(lang_dir):
+        for f in os.listdir(lang_dir):
+            if f.endswith(".json"):
+                with open(os.path.join(lang_dir, f), encoding="utf-8") as fh:
+                    v = json.load(fh).get("Not applied: ", "").strip()
+                if v:
+                    out.add(v)
+    return sorted(out)
+
+
+NOT_APPLIED = _not_applied_markers()
+
+
+def is_semantic_error(text: str, err: bool) -> bool:
+    return not err and any(m in text for m in NOT_APPLIED)
+
+
 def fill(value, ctx):
     if isinstance(value, str):
         return value.replace("{dir}", ctx["dir"]).replace("{secret}", str(ctx["secret"]))
@@ -117,22 +138,31 @@ def fill(value, ctx):
 
 def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: list, max_steps: int,
              lang: str = "en", reply_lang: str = "") -> dict:
-    stats = {"steps": 0, "tool_calls": 0, "tool_errors": 0, "bad_json": 0, "text_calls": 0,
+    stats = {"steps": 0, "tool_calls": 0, "tool_errors": 0, "semantic_errors": 0, "bad_json": 0, "text_calls": 0,
              "unknown_tool": 0, "prompt_tokens": 0, "completion_tokens": 0}
     transcript = []
+    golden_fails = []
     answer = ""
     t0 = time.time()
     task["setup"](g, ctx)
 
     if model is None:  # reference solution
-        for name, args in task["golden"]:
+        for step in task["golden"]:
+            name, args = step[0], step[1]
+            expect = step[2] if len(step) > 2 else {}
             if name == "__sleep":
                 time.sleep(args)
                 continue
             text, err = g.call(name, **fill(args, ctx))
             stats["tool_calls"] += 1
             stats["tool_errors"] += int(err)
+            stats["semantic_errors"] += int(is_semantic_error(text, err))
             transcript.append({"tool": name, "args": fill(args, ctx), "result": text, "error": err})
+            if "error" in expect and err != expect["error"]:
+                golden_fails.append(f"{name} replied {'an error' if err else 'success'}, expected "
+                                    f"{'an error' if expect['error'] else 'success'}: {text[:200]}")
+            if "text" in expect and not re.search(expect["text"], text):
+                golden_fails.append(f"{name} reply does not match {expect['text']!r}: {text[:200]}")
         answer = fill(task.get("golden_answer", "done"), ctx)
     else:
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
@@ -168,6 +198,7 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
                 else:
                     text, err = g.call_lang(c["name"], c["args"], reply_lang)
                 stats["tool_errors"] += int(err)
+                stats["semantic_errors"] += int(is_semantic_error(text, err))
                 transcript.append({"tool": c["name"], "args": c["args"], "result": text, "error": err,
                                    "from_text": c.get("from_text", False)})
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": text})
@@ -175,7 +206,7 @@ def run_task(g: GodotMcp, task: dict, ctx: dict, model: Model | None, tools: lis
             transcript.append({"note": f"step limit {max_steps} reached"})
 
     g.call("game_stop")
-    fails = task["check"](g, ctx, answer)
+    fails = golden_fails + task["check"](g, ctx, answer)
     stats["seconds"] = round(time.time() - t0, 1)
     return {"id": task["id"], "ok": not fails, "fails": fails, "answer": answer, "stats": stats, "transcript": transcript}
 
@@ -249,15 +280,17 @@ def main() -> None:
             results.append(r)
             s = r["stats"]
             mark = "OK  " if r["ok"] else "FAIL"
-            print(f"{mark} {task['id']:<8} calls {s.get('tool_calls', 0):>2}, errors {s.get('tool_errors', 0):>2}, "
+            print(f"{mark} {task['id']:<9} calls {s.get('tool_calls', 0):>2}, errors {s.get('tool_errors', 0):>2}, "
+                  f"silent {s.get('semantic_errors', 0)}, "
                   f"JSON {s.get('bad_json', 0)}, as text {s.get('text_calls', 0)}, {s.get('seconds', 0)} s"
                   + ("" if r["ok"] else "  ← " + "; ".join(r["fails"])))
 
     ok = sum(r["ok"] for r in results)
     tot = {k: sum(r["stats"].get(k, 0) for r in results) for k in
-           ["tool_calls", "tool_errors", "bad_json", "text_calls", "unknown_tool", "prompt_tokens", "completion_tokens"]}
+           ["tool_calls", "tool_errors", "semantic_errors", "bad_json", "text_calls", "unknown_tool", "prompt_tokens", "completion_tokens"]}
     print(f"\nTotal: {ok}/{len(results)} tasks solved. Calls {tot['tool_calls']}, with errors {tot['tool_errors']}"
-          f" ({(100 * tot['tool_errors'] // max(tot['tool_calls'], 1))}%), broken JSON {tot['bad_json']}, "
+          f" ({(100 * tot['tool_errors'] // max(tot['tool_calls'], 1))}%), silent failures {tot['semantic_errors']}"
+          f" (success replies with \"Not applied\"), broken JSON {tot['bad_json']}, "
           f"calls as text {tot['text_calls']}, unknown tool {tot['unknown_tool']}. "
           f"Tokens: {tot['prompt_tokens']} in / {tot['completion_tokens']} out.")
 

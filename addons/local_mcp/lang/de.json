@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] lausche auf http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "Kopiere den benötigten Block in die Konfiguration deines MCP-Clients. Diese Datei wird bei jedem Start des Editors neu geschrieben.",
  "missing or wrong token (see local_mcp.json)": "Token fehlt oder ist falsch (siehe local_mcp.json)",
- "\"%s\": %s s, %s": "\"%s\": %s s, %s"
+ "\"%s\": %s s, %s": "\"%s\": %s s, %s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s gehört zur instanziierten Szene %s (Knoten %s). Godot speichert keine Strukturänderungen innerhalb einer Instanz: bearbeite %s selbst (scene_open) oder ändere hier nur Eigenschaften mit node_set",
+ "%s: the engine stored %s instead of %s": "%s: die Engine hat %s statt %s gespeichert",
+ "Part of the instance %s (%s): only properties can be changed here": "Teil der Instanz %s (%s): hier lassen sich nur Eigenschaften ändern",
+ "\nNote: ": "\nHinweis: ",
+ "\nThe node was added. Fix the properties with node_set on %s": "\nDer Knoten wurde hinzugefügt. Korrigiere die Eigenschaften mit node_set auf %s",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "Klasse %s (%s) kann nicht hinzugefügt werden: das Skript kompiliert nicht oder erbt nicht von einem Knoten. Prüfe es mit script_read",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s ist bereits in %s deklariert. Wähle einen anderen Namen",
+ "value not applied: %s is %s, its parts are %s": "Wert nicht übernommen: %s ist %s, seine Teile sind %s",
+ "value not applied: no such sub-property": "Wert nicht übernommen: keine solche Untereigenschaft",
+ "value not applied: the property is read-only or rejected the value": "Wert nicht übernommen: die Eigenschaft ist schreibgeschützt oder hat den Wert abgelehnt"
 }

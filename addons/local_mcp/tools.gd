@@ -55,6 +55,7 @@ var _groups := {}  # name -> group object
 var _logger: Object = null
 var _defs: Array = []
 var _last_run_ms := 0
+var _class_scan := {}  # class_name -> path from reading .gd files; cleared on every script write
 
 
 func setup(plugin: EditorPlugin) -> void:
@@ -383,9 +384,11 @@ static func _snake(s: String) -> String:
 	return s.to_snake_case() if s != s.to_lower() else s
 
 
+## Adds the property changes to the open UndoRedo action.
+## Returns [planned: Array, failed: Array[String]]; planned items are {prop, value, old}.
+## Call _verify_props after commit_action: only it knows what really got applied.
 func _set_props(node: Node, props: Dictionary, ur: EditorUndoRedoManager) -> Array:
-	## Returns [applied: Array[String], failed: Array[String]].
-	var applied: Array = []
+	var planned: Array = []
 	var failed: Array = []
 	for key in props:
 		var prop := str(key)
@@ -402,25 +405,94 @@ func _set_props(node: Node, props: Dictionary, ur: EditorUndoRedoManager) -> Arr
 		if not c.ok:
 			failed.append("%s: %s" % [prop, c.error])
 			continue
+		var old = _get_prop(node, prop)
 		if prop.contains(":"):
-			var old = node.get_indexed(NodePath(prop))
 			ur.add_do_method(node, "set_indexed", NodePath(prop), c.value)
 			ur.add_undo_method(node, "set_indexed", NodePath(prop), old)
 		else:
 			ur.add_do_property(node, prop, c.value)
-			ur.add_undo_property(node, prop, node.get(prop))
+			ur.add_undo_property(node, prop, old)
 		if c.value is Resource:
 			ur.add_do_reference(c.value)
-		applied.append(prop)
-	return [applied, failed]
+		planned.append({"prop": prop, "value": c.value, "old": old})
+	return [planned, failed]
+
+
+static func _get_prop(obj: Object, prop: String):
+	return obj.get_indexed(NodePath(prop)) if prop.contains(":") else obj.get(prop)
+
+
+## Reads every planned property back after commit_action and compares it with the intent.
+## The engine fails silently on a wrong sub-property ("position:z"), a read-only property
+## or a setter that rejects the value, so without this the model got a "success".
+## Returns [applied: Array[String], failed: Array[String], notes: Array[String]].
+func _verify_props(node: Node, planned: Array) -> Array:
+	var applied: Array = []
+	var failed: Array = []
+	var notes: Array = []
+	for item in planned:
+		var prop: String = item.prop
+		var now = _get_prop(node, prop)
+		if _same(now, item.value):
+			applied.append(prop)
+		elif _same(now, item.old):
+			failed.append("%s: %s" % [prop, _not_applied_hint(node, prop)])
+		else:
+			applied.append(prop)
+			notes.append(L.t("%s: the engine stored %s instead of %s") % [prop, _show_prop(node, prop, now), Values.show(item.value)])
+	return [applied, failed, notes]
+
+
+## Why a value did not stick. For "position:z" on a Vector2 lists the parts it does have.
+func _not_applied_hint(node: Node, prop: String) -> String:
+	if prop.contains(":"):
+		var base := prop.get_slice(":", 0)
+		var parts := {TYPE_VECTOR2: "x, y", TYPE_VECTOR2I: "x, y", TYPE_VECTOR3: "x, y, z", TYPE_VECTOR3I: "x, y, z",
+			TYPE_VECTOR4: "x, y, z, w", TYPE_VECTOR4I: "x, y, z, w", TYPE_COLOR: "r, g, b, a",
+			TYPE_RECT2: "position, size", TYPE_RECT2I: "position, size"}
+		var t := typeof(node.get(base))
+		if prop.get_slice_count(":") == 2 and parts.has(t):
+			return L.t("value not applied: %s is %s, its parts are %s") % [base, type_string(t), parts[t]]
+		return L.t("value not applied: no such sub-property")
+	return L.t("value not applied: the property is read-only or rejected the value")
+
+
+## Equality for verification: numbers and vectors approximately, String == StringName.
+static func _same(a, b) -> bool:
+	if (a is int or a is float) and (b is int or b is float):
+		return is_equal_approx(float(a), float(b))
+	if (a is String or a is StringName) and (b is String or b is StringName):
+		return str(a) == str(b)
+	if typeof(a) != typeof(b):
+		return false
+	match typeof(a):
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_RECT2, TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_QUATERNION, TYPE_BASIS, TYPE_PLANE, TYPE_AABB:
+			return a.is_equal_approx(b)
+	return a == b
 
 
 func _report_props(node: Node, applied: Array) -> String:
 	var parts: Array = []
 	for prop in applied:
-		var v = node.get_indexed(NodePath(prop)) if str(prop).contains(":") else node.get(prop)
-		parts.append("%s=%s" % [prop, _show_prop(node, prop, v)])
+		parts.append("%s=%s" % [prop, _show_prop(node, prop, _get_prop(node, str(prop)))])
 	return ", ".join(parts)
+
+
+## Sets properties in one UndoRedo step and verifies them.
+## Returns {applied, failed, tail}: tail is the "Not applied"/"Note" text to append to a reply.
+func _apply_props(node: Node, props: Dictionary) -> Dictionary:
+	var ur := _ur()
+	ur.create_action(L.t("MCP: properties ") + str(node.name), UndoRedo.MERGE_DISABLE, _root())
+	var res := _set_props(node, props, ur)
+	ur.commit_action()
+	var v := _verify_props(node, res[0])
+	var failed: Array = res[1] + v[1]
+	var tail := ""
+	if not failed.is_empty():
+		tail += L.t("\nNot applied: ") + "; ".join(failed)
+	if not v[2].is_empty():
+		tail += L.t("\nNote: ") + "; ".join(v[2])
+	return {"applied": v[0], "failed": failed, "tail": tail}
 
 
 ## Property value for a reply; enums are shown by name.
@@ -436,6 +508,27 @@ func _show_prop(node: Node, prop: String, v) -> String:
 					return "%d (%s)" % [v, parts[0].strip_edges()]
 				idx += 1
 	return Values.show(v)
+
+
+## The instanced scene a node comes from, if the node is part of an instance's insides
+## (its owner is the instance root, not the open scene). Godot saves only property overrides
+## for such nodes: deleting, renaming or moving them is lost on save. null = the scene owns it.
+func _instance_of(node: Node) -> Node:
+	var root := _root()
+	if node == root or node.owner == null or node.owner == root:
+		return null
+	return node.owner
+
+
+## Error for a structural change inside an instance, or "" if the change is fine.
+## editable_ok: the change is saved when Editable Children is on (adding a child, a signal).
+func _instance_guard(node: Node, editable_ok := false) -> String:
+	var inst := _instance_of(node)
+	if inst == null or (editable_ok and _root().is_editable_instance(inst)):
+		return ""
+	var src := inst.scene_file_path if inst.scene_file_path != "" else str(inst.name)
+	return L.t("%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set") % [
+		_rel(node), src, _rel(inst), src]
 
 
 ## Subtree nodes owned by the scene (needed to restore owner after undo).
@@ -529,14 +622,18 @@ func _tree_lines(node: Node, level: int, max_depth: int, out: Array) -> void:
 	if not extras.is_empty():
 		line += " [" + ", ".join(extras) + "]"
 	out.append(line)
-	# Do not expand the insides of a scene instance: the model does not edit them.
-	if level >= max_depth or (node != _root() and node.scene_file_path != ""):
-		if node.get_child_count() > 0 and level >= max_depth:
+	if level >= max_depth:
+		if node.get_child_count() > 0:
 			out.append("  ".repeat(level + 1) + L.t("…%d children") % node.get_child_count())
 		return
+	# The insides of a scene instance are not expanded (they belong to the other scene),
+	# but children added to the instance in this scene are shown.
+	var is_instance := node != _root() and node.scene_file_path != ""
 	for c in node.get_children():
 		if c.owner == null and c != _root():
 			continue  # internal editor nodes
+		if is_instance and c.owner != _root():
+			continue
 		_tree_lines(c, level + 1, max_depth, out)
 
 
@@ -602,6 +699,9 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 	if pf.has("error"):
 		return _err(L.t("parent: ") + pf.error)
 	var parent: Node = pf.node
+	var guard := _instance_guard(parent, true)
+	if guard != "":
+		return _err(guard)
 	var type := str(args.type).strip_edges()
 	var node: Node = null
 	if type.ends_with(".tscn") or type.ends_with(".scn"):
@@ -625,7 +725,10 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 		if script_path == "":
 			return _err(L.t("unknown type \"%s\". It is not a Godot class, a script class_name or a .tscn") % type)
 		var scr: Script = load(script_path)
-		node = ClassDB.instantiate(scr.get_instance_base_type())
+		var base: StringName = scr.get_instance_base_type() if scr else &""
+		if base == &"" or not ClassDB.is_parent_class(base, "Node"):
+			return _err(L.t("class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read") % [type, script_path])
+		node = ClassDB.instantiate(base)
 		node.set_script(scr)
 	var wanted_name := str(args.get("name", ""))
 	if wanted_name != "":
@@ -646,21 +749,57 @@ func _t_node_add(args: Dictionary) -> Dictionary:
 		msg += L.t("; the name was taken, got ") + str(node.name)
 	var props = args.get("properties", {})
 	if props is Dictionary and not props.is_empty():
-		ur.create_action(L.t("MCP: properties ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
-		var res := _set_props(node, props, ur)
-		ur.commit_action()
-		if not res[0].is_empty():
-			msg += L.t("\nProperties: ") + _report_props(node, res[0])
-		if not res[1].is_empty():
-			msg += L.t("\nNot applied: ") + "; ".join(res[1])
+		var r := _apply_props(node, props)
+		if not r.applied.is_empty():
+			msg += L.t("\nProperties: ") + _report_props(node, r.applied)
+		msg += r.tail
+		if not r.failed.is_empty():
+			# The node stays (no work is lost), but the reply is an error so the model fixes it.
+			msg += L.t("\nThe node was added. Fix the properties with node_set on %s") % _rel(node)
+			return {"text": L.t("Error: ") + msg, "error": true}
 	return _ok(msg)
 
 
 func _global_class_path(cls: String) -> String:
+	var registered := _registered_class_path(cls)
+	if registered != "":
+		return registered
+	# The editor registers a new class_name only after its file scan, so right after
+	# script_write the class is not in the list yet. Fall back to reading the .gd files.
+	if _class_scan.is_empty():
+		_scan_class_names("res://", _class_scan)
+	return str(_class_scan.get(cls, ""))
+
+
+static func _registered_class_path(cls: String) -> String:
 	for entry in ProjectSettings.get_global_class_list():
 		if str(entry.get("class", "")) == cls:
 			return str(entry.get("path", ""))
 	return ""
+
+
+## class_name declared in the source, or "".
+static func _class_name_in(source: String) -> String:
+	var m := RegEx.create_from_string("(?m)^(?:@\\w+\\s+)*class_name\\s+([A-Za-z_]\\w*)").search(source)
+	return m.get_string(1) if m else ""
+
+
+## Fills out with {class_name: path} for every .gd file under dir.
+func _scan_class_names(dir: String, out: Dictionary) -> void:
+	if dir == "res://.godot" or FileAccess.file_exists(dir.path_join(".gdignore")):
+		return
+	var d := DirAccess.open(dir)
+	if d == null:
+		return
+	for f in d.get_files():
+		if f.get_extension() == "gd":
+			var path := dir.path_join(f)
+			var cls := _class_name_in(FileAccess.get_file_as_string(path))
+			if cls != "" and not out.has(cls):
+				out[cls] = path
+	for sub in d.get_directories():
+		if not sub.begins_with("."):
+			_scan_class_names(dir.path_join(sub), out)
 
 
 func _t_node_info(args: Dictionary) -> Dictionary:
@@ -675,6 +814,9 @@ func _t_node_info(args: Dictionary) -> Dictionary:
 		lines.append(L.t("Script: ") + (scr.resource_path if scr.resource_path != "" else L.t("built-in")))
 	if node.scene_file_path != "" and node != _root():
 		lines.append(L.t("Scene instance: ") + node.scene_file_path)
+	var inst := _instance_of(node)
+	if inst:
+		lines.append(L.t("Part of the instance %s (%s): only properties can be changed here") % [_rel(inst), inst.scene_file_path])
 	var changed: Array = []
 	for p in node.get_property_list():
 		if not (p.usage & PROPERTY_USAGE_STORAGE) or not (p.usage & PROPERTY_USAGE_EDITOR):
@@ -722,16 +864,15 @@ func _t_node_set(args: Dictionary) -> Dictionary:
 	if not props is Dictionary or props.is_empty():
 		return _err(L.t("properties must be an object, e.g. {\"position\": [100, 50]}"))
 	var node: Node = f.node
-	var ur := _ur()
-	ur.create_action(L.t("MCP: properties ") + str(node.name), UndoRedo.MERGE_DISABLE, _root())
-	var res := _set_props(node, props, ur)
-	ur.commit_action()
+	var r := _apply_props(node, props)
 	var msg := ""
-	if not res[0].is_empty():
-		msg = "%s: %s" % [_rel(node), _report_props(node, res[0])]
-	if not res[1].is_empty():
-		msg += ("\n" if msg != "" else "") + L.t("Not applied: ") + "; ".join(res[1])
-	return _err(msg.trim_prefix("\n")) if res[0].is_empty() else _ok(msg)
+	if not r.applied.is_empty():
+		msg = "%s: %s" % [_rel(node), _report_props(node, r.applied)]
+	msg += r.tail
+	if r.failed.is_empty():
+		return _ok(msg)
+	# Any property that did not stick is an error: the model must not move on believing it did.
+	return _err(msg.trim_prefix("\n"))
 
 
 func _t_node_delete(args: Dictionary) -> Dictionary:
@@ -742,6 +883,9 @@ func _t_node_delete(args: Dictionary) -> Dictionary:
 	var root := _root()
 	if node == root:
 		return _err(L.t("cannot delete the scene root"))
+	var guard := _instance_guard(node)
+	if guard != "":
+		return _err(guard)
 	var parent := node.get_parent()
 	var owned := _owned(node, root)
 	var path := _rel(node)
@@ -765,6 +909,9 @@ func _t_node_move(args: Dictionary) -> Dictionary:
 	var root := _root()
 	if node == root:
 		return _err(L.t("the scene root cannot be moved or renamed"))
+	var guard := _instance_guard(node)
+	if guard != "":
+		return _err(guard)
 	var has_change := args.has("new_name") or args.has("new_parent") or args.has("index")
 	if not has_change:
 		return _err(L.t("give at least one of: new_name, new_parent or index"))
@@ -778,6 +925,9 @@ func _t_node_move(args: Dictionary) -> Dictionary:
 		new_parent = pf.node
 		if new_parent == node or node.is_ancestor_of(new_parent):
 			return _err(L.t("cannot move a node into itself"))
+		var pguard := _instance_guard(new_parent, true)
+		if pguard != "":
+			return _err("new_parent: " + pguard)
 	var ur := _ur()
 	ur.create_action(L.t("MCP: move ") + str(node.name), UndoRedo.MERGE_DISABLE, root)
 	if args.has("new_name") and str(args.new_name) != "":
@@ -813,6 +963,9 @@ func _t_signal_connect(args: Dictionary) -> Dictionary:
 		return _err("to: " + tf.error)
 	var src: Node = ff.node
 	var dst: Node = tf.node
+	var guard := _instance_guard(src, true)
+	if guard != "":
+		return _err("from: " + guard)
 	var sig := str(args.signal).strip_edges().trim_suffix("()")
 	if not src.has_signal(sig):
 		var names: Array = []
@@ -1057,9 +1210,22 @@ static func _clean_code(s: String) -> String:
 func _save_script(path: String, content: String) -> Dictionary:
 	if not path.get_extension() in ["gd", "gdshader", "cs", "txt", "md", "json", "cfg", "tres", "gdshaderinc"]:
 		return {"error": L.t("only text files can be written (.gd, .gdshader, .cs, .json, .txt ...)")}
+	var is_gd := path.get_extension() == "gd"
 	var check := {"valid": true, "check": L.t("Check: not GDScript, syntax not checked")}
-	if path.get_extension() == "gd":
-		check = _check_gdscript(content)
+	# A script whose class_name is already registered for this very file cannot be checked as an
+	# anonymous copy (it would "hide" its own class), so it is compiled for real after writing.
+	var check_after := false
+	if is_gd:
+		_class_scan.clear()
+		var cls := _class_name_in(content)
+		var taken := _class_owner_conflict(cls, path)
+		if taken != "":
+			check = {"valid": false, "check": L.t("Check: ERRORS\n") + "  " +
+				L.t("class_name %s is already declared in %s. Pick another name") % [cls, taken]}
+		elif cls != "" and _registered_class_path(cls) == path:
+			check_after = true
+		else:
+			check = _check_gdscript(content)
 	_ensure_dir(path)
 	var old_text := FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 	var f := FileAccess.open(path, FileAccess.WRITE)
@@ -1069,12 +1235,61 @@ func _save_script(path: String, content: String) -> Dictionary:
 	f.close()
 	_fs_update(path)
 	_sync_open_editors(old_text, content)
-	if path.get_extension() == "gd" and ResourceLoader.has_cached(path):
+	if check_after:
+		check = _check_real_script(path, content)
+	elif is_gd and ResourceLoader.has_cached(path):
 		var scr: Script = load(path)
 		scr.source_code = content
 		if check.valid:
 			scr.reload(true)
 	return check
+
+
+## The other file that already declares class_name cls, or "" if there is none.
+func _class_owner_conflict(cls: String, path: String) -> String:
+	if cls == "":
+		return ""
+	var owner := _registered_class_path(cls)
+	if owner == "":
+		if _class_scan.is_empty():
+			_scan_class_names("res://", _class_scan)
+		owner = str(_class_scan.get(cls, ""))
+	return owner if owner != "" and owner != path else ""
+
+
+## Compiles the file's own script resource (the one the editor and the game use).
+func _check_real_script(path: String, content: String) -> Dictionary:
+	var mark: int = _logger.mark() if _logger else 0
+	var scr: Script = load(path)
+	var err := ERR_PARSE_ERROR
+	if scr:
+		scr.source_code = content
+		err = scr.reload(true)
+	return _check_result(err, mark, path)
+
+
+func _check_gdscript(content: String) -> Dictionary:
+	var scr := GDScript.new()
+	# class_name stays: the file's own type is then known, so "signal died(e: Enemy)" in
+	# class_name Enemy compiles. Clashes with other files are caught by _class_owner_conflict.
+	scr.source_code = content
+	var mark: int = _logger.mark() if _logger else 0
+	return _check_result(scr.reload(), mark)
+
+
+## own_path: the checked file; its name is dropped from error lines, other files keep theirs.
+func _check_result(err: int, mark: int, own_path := "") -> Dictionary:
+	if err == OK:
+		return {"valid": true, "check": L.t("Check: no errors")}
+	var details: Array = []
+	if _logger:
+		for l in _logger.since(mark):
+			var d := "  " + _clean_err(l, own_path)
+			if not details.has(d):  # loading and reloading report the same error twice
+				details.append(d)
+	if details.is_empty():
+		details.append(L.t("  details are in the editor Output panel (on Godot 4.5+ they come here)"))
+	return {"valid": false, "check": L.t("Check: ERRORS\n") + "\n".join(details.slice(0, 10))}
 
 
 ## If the file is open in the built-in script editor (e.g. the debugger opened it after an error),
@@ -1101,31 +1316,14 @@ func _sync_open_editors(old_text: String, new_text: String) -> void:
 		te.set_caret_line(mini(line, te.get_line_count() - 1))
 
 
-func _check_gdscript(content: String) -> Dictionary:
-	var scr := GDScript.new()
-	# class_name in an anonymous script clashes with the already registered class,
-	# so comment it out for the check (line numbers stay the same).
-	var rx := RegEx.create_from_string("(?m)^class_name\\b")
-	scr.source_code = rx.sub(content, "#class_name", true)
-	var mark: int = _logger.mark() if _logger else 0
-	var err := scr.reload()
-	if err == OK:
-		return {"valid": true, "check": L.t("Check: no errors")}
-	var details: Array = []
-	if _logger:
-		for l in _logger.since(mark):
-			details.append("  " + _clean_err(l))
-	if details.is_empty():
-		details.append(L.t("  details are in the editor Output panel (on Godot 4.5+ they come here)"))
-	return {"valid": false, "check": L.t("Check: ERRORS\n") + "\n".join(details.slice(0, 10))}
-
-
-static func _clean_err(l: String) -> String:
-	var rx := RegEx.create_from_string("\\s*\\(gdscript://[^:]*:(\\d+)\\)")
+## "SCRIPT ERROR: Parse Error: x (gdscript://12.gd:5)" -> "line 5: Parse Error: x".
+## A res:// location is shortened the same way only when it is own_path.
+static func _clean_err(l: String, own_path := "") -> String:
+	var rx := RegEx.create_from_string("\\s*\\((gdscript://[^:]*|res://[^:)]*):(\\d+)\\)")
 	var m := rx.search(l)
 	var out := l.replace("SCRIPT ERROR: ", "")
-	if m:
-		out = L.t("line %s: %s") % [m.get_string(1), rx.sub(out, "")]
+	if m and (m.get_string(1).begins_with("gdscript://") or m.get_string(1) == own_path):
+		out = L.t("line %s: %s") % [m.get_string(2), rx.sub(out, "")]
 	return out
 
 

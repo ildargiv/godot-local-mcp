@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] http://127.0.0.1:%d/mcp で待ち受け中",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "必要なブロックを MCP クライアントの設定にコピーしてください。このファイルはエディター起動のたびに書き直されます。",
  "missing or wrong token (see local_mcp.json)": "トークンがないか間違っています（local_mcp.json を参照）",
- "\"%s\": %s s, %s": "\"%s\": %s 秒、%s"
+ "\"%s\": %s s, %s": "\"%s\": %s 秒、%s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s はインスタンス化されたシーン %s（ノード %s）の一部です。Godot はインスタンス内部の構造変更を保存しません。%s 自体を編集する（scene_open）か、ここでは node_set でプロパティだけを変更してください",
+ "%s: the engine stored %s instead of %s": "%s: エンジンは指定値の代わりに %s を保存しました（指定値 %s）",
+ "Part of the instance %s (%s): only properties can be changed here": "インスタンス %s（%s）の一部: ここではプロパティのみ変更できます",
+ "\nNote: ": "\n注意: ",
+ "\nThe node was added. Fix the properties with node_set on %s": "\nノードは追加されました。%s のプロパティを node_set で修正してください",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "クラス %s（%s）を追加できません: スクリプトがコンパイルできないか、ノードを継承していません。script_read で確認してください",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s は既に %s で宣言されています。別の名前を選んでください",
+ "value not applied: %s is %s, its parts are %s": "値が適用されていません: %s は %s で、要素は %s です",
+ "value not applied: no such sub-property": "値が適用されていません: そのサブプロパティはありません",
+ "value not applied: the property is read-only or rejected the value": "値が適用されていません: プロパティが読み取り専用か、値を拒否しました"
 }

@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] 正在监听 http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "将需要的配置块复制到你的 MCP 客户端配置中。每次启动编辑器时该文件都会被重写。",
  "missing or wrong token (see local_mcp.json)": "token 缺失或错误（见 local_mcp.json）",
- "\"%s\": %s s, %s": "\"%s\"：%s 秒，%s"
+ "\"%s\": %s s, %s": "\"%s\"：%s 秒，%s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s 属于实例化场景 %s（节点 %s）。Godot 不会保存实例内部的结构修改：请直接编辑 %s（scene_open），或在这里只用 node_set 修改属性",
+ "%s: the engine stored %s instead of %s": "%s：引擎保存的是 %s，而不是 %s",
+ "Part of the instance %s (%s): only properties can be changed here": "属于实例 %s（%s）：这里只能修改属性",
+ "\nNote: ": "\n注意：",
+ "\nThe node was added. Fix the properties with node_set on %s": "\n节点已添加。请用 node_set 修正 %s 的属性",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "无法添加类 %s（%s）：脚本无法编译或没有继承节点。请用 script_read 检查",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s 已在 %s 中声明。请换一个名字",
+ "value not applied: %s is %s, its parts are %s": "值未生效：%s 是 %s，其分量为 %s",
+ "value not applied: no such sub-property": "值未生效：没有这个子属性",
+ "value not applied: the property is read-only or rejected the value": "值未生效：该属性只读或拒绝了这个值"
 }

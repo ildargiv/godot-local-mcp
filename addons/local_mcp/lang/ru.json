@@ -216,5 +216,15 @@
  "[LocalMCP] listening on http://127.0.0.1:%d/mcp": "[LocalMCP] слушаю http://127.0.0.1:%d/mcp",
  "Copy the block you need into your MCP client config. This file is rewritten every time the editor starts.": "Скопируйте нужный блок в конфиг вашего MCP-клиента. Файл перезаписывается при каждом запуске редактора.",
  "missing or wrong token (see local_mcp.json)": "missing or wrong token (см. local_mcp.json)",
- "\"%s\": %s s, %s": "\"%s\": %s c, %s"
+ "\"%s\": %s s, %s": "\"%s\": %s c, %s",
+ "%s is part of the instanced scene %s (node %s). Godot does not save structural changes inside an instance: edit %s itself (scene_open), or change only properties with node_set": "%s входит в инстанс сцены %s (узел %s). Godot не сохраняет структурные изменения внутри инстанса: правьте саму %s (scene_open) или меняйте здесь только свойства через node_set",
+ "%s: the engine stored %s instead of %s": "%s: движок сохранил %s вместо %s",
+ "Part of the instance %s (%s): only properties can be changed here": "Часть инстанса %s (%s): здесь можно менять только свойства",
+ "\nNote: ": "\nПримечание: ",
+ "\nThe node was added. Fix the properties with node_set on %s": "\nУзел добавлен. Исправьте свойства через node_set на %s",
+ "class %s (%s) cannot be added: the script does not compile or does not extend a node. Check it with script_read": "класс %s (%s) нельзя добавить: скрипт не компилируется или не наследует узел. Проверьте его через script_read",
+ "class_name %s is already declared in %s. Pick another name": "class_name %s уже объявлен в %s. Выберите другое имя",
+ "value not applied: %s is %s, its parts are %s": "значение не применилось: %s имеет тип %s, его части: %s",
+ "value not applied: no such sub-property": "значение не применилось: нет такого под-свойства",
+ "value not applied: the property is read-only or rejected the value": "значение не применилось: свойство только для чтения или отклонило значение"
 }
