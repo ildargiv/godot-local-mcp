@@ -984,18 +984,44 @@ func _save_script(path: String, content: String) -> Dictionary:
 	if path.get_extension() == "gd":
 		check = _check_gdscript(content)
 	_ensure_dir(path)
+	var old_text := FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return {"error": "не удалось записать %s (код %d)" % [path, FileAccess.get_open_error()]}
 	f.store_string(content)
 	f.close()
 	_fs_update(path)
+	_sync_open_editors(old_text, content)
 	if path.get_extension() == "gd" and ResourceLoader.has_cached(path):
 		var scr: Script = load(path)
 		scr.source_code = content
 		if check.valid:
 			scr.reload(true)
 	return check
+
+
+## Если файл открыт во встроенном редакторе скриптов (например, его открыл отладчик после ошибки),
+## в буфере остаётся старый текст, и при следующем запуске игры редактор сохранит его поверх нашей правки.
+## Обновляем такие буферы. Буфер с несохранёнными правками пользователя не трогаем: его текст
+## отличается от старого содержимого файла.
+func _sync_open_editors(old_text: String, new_text: String) -> void:
+	if old_text == "" or old_text == new_text:
+		return
+	var se := EditorInterface.get_script_editor()
+	if se == null:
+		return
+	var old_norm := old_text.replace("\r\n", "\n").strip_edges(false, true)
+	for ed in se.get_open_script_editors():
+		var ce = ed.get_base_editor()
+		if not (ce is TextEdit):
+			continue
+		var te: TextEdit = ce
+		if te.text.replace("\r\n", "\n").strip_edges(false, true) != old_norm:
+			continue
+		var line := te.get_caret_line()
+		te.text = new_text
+		te.tag_saved_version()
+		te.set_caret_line(mini(line, te.get_line_count() - 1))
 
 
 func _check_gdscript(content: String) -> Dictionary:
@@ -1077,12 +1103,20 @@ func _t_game_output(args: Dictionary) -> Dictionary:
 	var hidden := 0
 	if _last_run_ms == 0:
 		game_lines.append("(игра в этой сессии не запускалась, вызовите game_run)")
-	elif FileAccess.file_exists(log_path):
-		var parsed := _filter_log(FileAccess.get_file_as_string(log_path).split("\n"), errors_only)
-		game_lines = parsed.lines
-		hidden = parsed.hidden
 	else:
-		game_lines.append("(лог не найден: включите debug/file_logging/enable_file_logging в настройках проекта)")
+		# Пока игра идёт, читаем живые источники редактора: панель Output (print) и вкладку
+		# Errors отладчика. На Windows файл лога игры до её остановки может быть недоступен.
+		var raw := PackedStringArray()
+		if EditorInterface.is_playing_scene():
+			raw = _live_game_output()
+		if raw.is_empty() and FileAccess.file_exists(log_path):
+			raw = FileAccess.get_file_as_string(log_path).split("\n")
+		if raw.is_empty() and not EditorInterface.is_playing_scene() and not FileAccess.file_exists(log_path):
+			game_lines.append("(лог не найден: включите debug/file_logging/enable_file_logging в настройках проекта)")
+		else:
+			var parsed := _filter_log(raw, errors_only)
+			game_lines = parsed.lines
+			hidden = parsed.hidden
 	if game_lines.size() > max_lines:
 		game_lines = ["…пропущено %d строк" % (game_lines.size() - max_lines)] + game_lines.slice(game_lines.size() - max_lines)
 	out.append("Вывод игры:" if not game_lines.is_empty() else ("Вывод игры: ошибок нет" if errors_only else "Вывод игры: пусто"))
@@ -1095,6 +1129,82 @@ func _t_game_output(args: Dictionary) -> Dictionary:
 			out.append("Ошибки редактора:")
 			out.append_array(ed.lines.slice(max(0, ed.lines.size() - 20)))
 	return _ok("\n".join(out))
+
+
+## Вывод текущего запуска из редактора, в формате файла лога:
+## print-строки из панели Output и ошибки с вкладки Errors отладчика.
+func _live_game_output() -> PackedStringArray:
+	var out := PackedStringArray()
+	var panel := _editor_output_text().split("\n")
+	var start := 0
+	for i in panel.size():
+		if panel[i].begins_with("Godot Engine v"):
+			start = i + 1
+	for i in range(start, panel.size()):
+		var l: String = panel[i]
+		# Строки с отступом и ERROR/WARNING в панели пишет сам редактор, а не игра.
+		if l.begins_with("  ERROR:") or l.begins_with("  WARNING:") or l.begins_with("OpenGL API") or l.begins_with("Vulkan "):
+			continue
+		out.append(l)
+	out.append_array(_debugger_errors())
+	return out
+
+
+## Ошибки текущей сессии с вкладки Errors отладчика.
+func _debugger_errors() -> PackedStringArray:
+	var out := PackedStringArray()
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return out
+	for d in base.find_children("*", "ScriptEditorDebugger", true, false):
+		for t in (d as Node).find_children("*", "Tree", true, false):
+			var tr: Tree = t
+			if not str(tr.get_parent().name).begins_with("Errors") or tr.get_root() == null:
+				continue
+			var it := tr.get_root().get_first_child()
+			while it:
+				var msg := it.get_text(1)
+				var marker := msg.find("(): ")
+				var colon := msg.find(": ")
+				if marker > 0 and msg.substr(0, marker).contains(" @ "):
+					msg = msg.substr(marker + 4)  # "m2.gd:7 @ _ready(): текст" -> "текст"
+				elif colon > 0 and not msg.substr(0, colon).contains(" "):
+					msg = msg.substr(colon + 2)  # "_ready: текст" -> "текст"
+				var warning := it.get_tooltip_text(1).begins_with("Warning")
+				var where := ""
+				var is_script := false
+				var meta = it.get_metadata(0)
+				if meta is Array and meta.size() >= 2 and str(meta[0]).begins_with("res://"):
+					# В метаданных полный путь к скрипту и строка.
+					is_script = true
+					where = "%s:%d" % [meta[0], int(meta[1])]
+				else:
+					var kid := it.get_first_child()
+					while kid:
+						if kid.get_text(0).contains("Source"):
+							where = kid.get_text(1)
+						kid = kid.get_next()
+				var kind := ("SCRIPT " if is_script else "") + ("WARNING: " if warning else "ERROR: ")
+				out.append(kind + msg)
+				if where != "":
+					out.append("   at: " + where)
+				it = it.get_next()
+	return out
+
+
+## Текст панели Output редактора (туда отладчик пишет вывод запущенной игры).
+## Нужен, когда файл лога игры недоступен для чтения (Windows держит его, пока игра работает).
+func _editor_output_text() -> String:
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return ""
+	var logs := base.find_children("*", "EditorLog", true, false)
+	if logs.is_empty():
+		return ""
+	var rtls := (logs[0] as Node).find_children("*", "RichTextLabel", true, false)
+	if rtls.is_empty():
+		return ""
+	return (rtls[0] as RichTextLabel).get_parsed_text()
 
 
 ## Делит лог на записи (строка + её отступленные продолжения) и убирает шум движка.

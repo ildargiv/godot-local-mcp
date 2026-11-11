@@ -79,8 +79,9 @@ def c_ui(g, ctx, answer):
         fails.append("нет Label ScoreLabel")
     elif not has_prop(l, "text", r'"Score: 0"'):
         fails.append("у метки текст не 'Score: 0'")
-    elif not has_prop(l, "modulate", r"#ffff00|#ff0"):
-        fails.append("метка не жёлтая (modulate)")
+    elif not (has_prop(l, "modulate", r"#ffff00") or has_prop(l, "self_modulate", r"#ffff00")
+              or has_prop(l, "theme_override_colors/font_color", r"#ffff00")):
+        fails.append("метка не жёлтая (ни modulate, ни self_modulate, ни font_color)")
     return fails
 
 

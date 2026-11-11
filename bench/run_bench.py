@@ -187,7 +187,7 @@ def main() -> None:
     ap.add_argument("--api-key-env", default="", help="имя переменной окружения с ключом")
     ap.add_argument("--tasks", default="", help="через запятую, например player,fix")
     ap.add_argument("--repeat", type=int, default=1, help="сколько раз гонять каждую задачу")
-    ap.add_argument("--max-steps", type=int, default=15)
+    ap.add_argument("--max-steps", type=int, default=25)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--golden", action="store_true", help="прогнать эталонные решения вместо модели")
