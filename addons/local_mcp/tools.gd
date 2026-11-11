@@ -180,21 +180,35 @@ func call_tool(name: String, raw_args: Dictionary) -> Dictionary:
 		for d in all_defs:
 			names.append(d.name)
 		return _err("нет инструмента \"%s\". Есть: %s" % [name, ", ".join(names)])
-	var args := _normalize_args(raw_args, def.inputSchema.properties.keys())
+	var args := _normalize_args(raw_args, def.inputSchema.properties)
 	for req in def.inputSchema.required:
 		if not args.has(req) or (args[req] is String and args[req] == "" and req != "new_text" and req != "content"):
 			return _err("не хватает аргумента \"%s\" (обязательные: %s)" % [req, ", ".join(def.inputSchema.required)])
 	var fn := "_t_" + name
-	if has_method(fn):
-		return call(fn, args)
-	for g in _groups:
-		if _groups[g].has_method(fn):
-			return _groups[g].call(fn, args)
-	return _err("инструмент не реализован: " + name)
+	var target: Object = self if has_method(fn) else null
+	if target == null:
+		for g in _groups:
+			if _groups[g].has_method(fn):
+				target = _groups[g]
+	if target == null:
+		return _err("инструмент не реализован: " + name)
+	# В GDScript нет try/catch: при ошибке выполнения call() вернёт null, и раньше модель
+	# получала пустой «успешный» ответ. Теперь это явная ошибка с текстом из лога.
+	var mark: int = _logger.mark() if _logger else 0
+	var res = target.call(fn, args)
+	if res is Dictionary and res.has("text"):
+		return res
+	var why: Array = []
+	if _logger:
+		for l in _logger.since(mark):
+			why.append(_clean_err(l))
+	return _err("внутренняя ошибка инструмента %s%s. Попробуйте другие аргументы; если повторяется, это баг плагина" % [
+		name, (": " + "; ".join(why.slice(0, 3))) if not why.is_empty() else ""])
 
 
 ## Переименовывает синонимы в канонические имена, приводит числа и булевы.
-func _normalize_args(raw: Dictionary, known: Array) -> Dictionary:
+func _normalize_args(raw: Dictionary, schema_props: Dictionary) -> Dictionary:
+	var known: Array = schema_props.keys()
 	var out := {}
 	for k in raw:
 		out[str(k)] = raw[k]
@@ -205,18 +219,33 @@ func _normalize_args(raw: Dictionary, known: Array) -> Dictionary:
 			if out.has(alias) and not alias in known:
 				out[canon] = out[alias]
 				break
-	# properties могли прийти строкой JSON
-	if out.get("properties") is String:
-		var parsed = JSON.parse_string(out.properties)
-		if parsed is Dictionary:
-			out.properties = parsed
-	for k in ["depth", "index", "start_line", "end_line", "lines"]:
-		if out.has(k) and out[k] is String and (out[k] as String).is_valid_float():
-			out[k] = int(float(out[k]))
-		elif out.has(k) and out[k] is float:
-			out[k] = int(out[k])
-	if out.get("errors_only") is String:
-		out.errors_only = (out.errors_only as String).to_lower() in ["true", "1", "yes"]
+	# Приведение по типу из схемы: модели присылают "True", "1", "[32, 32]" строками.
+	for k in out.keys():
+		if not schema_props.has(k):
+			continue
+		var want: String = str(schema_props[k].get("type", ""))
+		var v = out[k]
+		match want:
+			"boolean":
+				if v is String:
+					out[k] = (v as String).strip_edges().to_lower() in ["true", "1", "yes", "on", "да"]
+				elif v is float or v is int:
+					out[k] = v != 0
+				elif v == null:
+					out[k] = false
+			"integer":
+				if v is String and (v as String).strip_edges().is_valid_float():
+					out[k] = int(float(v))
+				elif v is float:
+					out[k] = int(v)
+			"number":
+				if v is String and (v as String).strip_edges().is_valid_float():
+					out[k] = float(v)
+			"array", "object":
+				if v is String:
+					var parsed = JSON.parse_string(v)
+					if (want == "array" and parsed is Array) or (want == "object" and parsed is Dictionary):
+						out[k] = parsed
 	return out
 
 
